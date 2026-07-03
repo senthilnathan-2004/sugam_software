@@ -107,7 +107,7 @@ export function InvoicePrint({ invoice, patient, items }: InvoicePrintProps) {
             <thead>
               <tr className="border-b-2 border-slate-100 text-slate-400 font-bold uppercase tracking-wider text-[10px] pb-2">
                 <th className="pb-2 w-1/12">#</th>
-                <th className="pb-2 w-4/12">Item Description</th>
+                <th className="pb-2 w-4/12">Medicine Name</th>
                 <th className="pb-2 w-2/12">Batch</th>
                 <th className="pb-2 w-1/12">Qty</th>
                 <th className="pb-2 w-2/12">Price</th>
@@ -178,7 +178,7 @@ export function InvoicePrint({ invoice, patient, items }: InvoicePrintProps) {
             <table className="w-full text-left">
               <thead>
                 <tr className="border-b border-dashed border-slate-300">
-                  <th className="pb-1 w-1/2">Item</th>
+                  <th className="pb-1 w-1/2">Medicine</th>
                   <th className="pb-1 w-1/4 text-center">Qty</th>
                   <th className="pb-1 w-1/4 text-right">Amt</th>
                 </tr>

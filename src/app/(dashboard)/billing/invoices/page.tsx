@@ -11,14 +11,36 @@ import { Badge } from '@/components/ui/badge';
 import { RotateCcw, Printer, ArrowLeft, Download, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
+import { Eye } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { InvoicePrint } from '@/features/billing/components/invoice-print';
+import { useInventory } from '@/features/inventory/hooks/use-inventory';
 
 export default function InvoicesPage() {
   const { invoices, isLoading, fetchInvoices, returnInvoice, exportInvoices, importInvoices } = useBilling();
+  const { medicines, fetchMedicines } = useInventory();
   const [isPending, startTransition] = useTransition();
+  const [selectedInvoice, setSelectedInvoice] = React.useState<Invoice | null>(null);
 
   useEffect(() => {
     fetchInvoices();
-  }, [fetchInvoices]);
+    fetchMedicines();
+  }, [fetchInvoices, fetchMedicines]);
+
+  const getItemsWithNames = (itemsStr: string) => {
+    try {
+      const parsed = JSON.parse(itemsStr || '[]');
+      return parsed.map((item: any) => {
+        if (!item.name && item.medicineId) {
+          const med = medicines.find((m) => m.id === item.medicineId);
+          return { ...item, name: med ? med.name : 'Unknown Medicine' };
+        }
+        return item;
+      });
+    } catch {
+      return [];
+    }
+  };
 
   const handleReturn = (invoice: Invoice) => {
     if (invoice.isReturn) return;
@@ -104,6 +126,17 @@ export default function InvoicesPage() {
               className="h-8 w-8 text-slate-500 hover:bg-slate-100"
               onClick={(e) => {
                 e.stopPropagation();
+                setSelectedInvoice(inv);
+              }}
+            >
+              <Eye className="h-4 w-4" />
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8 text-slate-500 hover:bg-slate-100"
+              onClick={(e) => {
+                e.stopPropagation();
                 // Simple browser print trigger
                 window.print();
               }}
@@ -152,6 +185,26 @@ export default function InvoicesPage() {
       />
 
       <DataTable columns={columns} data={invoices} isLoading={isLoading} />
+
+      <Dialog open={!!selectedInvoice} onOpenChange={(open) => !open && setSelectedInvoice(null)}>
+        <DialogContent className="max-w-4xl sm:max-w-5xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>View Bill</DialogTitle>
+          </DialogHeader>
+          {selectedInvoice && (
+            <InvoicePrint
+              invoice={selectedInvoice}
+              patient={{
+                name: selectedInvoice.patientName || (selectedInvoice as any).walkinName || 'Walk-in Customer',
+                patientId: selectedInvoice.patientId || 'WALK-IN',
+                phone: (selectedInvoice as any).walkinPhone || 'N/A',
+                address: 'N/A',
+              }}
+              items={getItemsWithNames(selectedInvoice.items)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -114,7 +114,13 @@ export function InvoiceForm({ medicines, prescribedMedicines, consultationDetail
   };
 
   const handlePreCheckout = (values: any) => {
-    const activeItems = values.items.filter((item: any) => item.medicineId);
+    const activeItems = values.items.filter((item: any) => item.medicineId).map((item: any) => {
+      const med = medicines.find(m => m.id === item.medicineId);
+      return {
+        ...item,
+        name: med ? med.name : 'Unknown Medicine',
+      };
+    });
     if (activeItems.length === 0) return;
 
     onOpenCheckout({
