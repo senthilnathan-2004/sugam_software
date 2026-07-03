@@ -1,0 +1,17 @@
+{
+  "version": 1.1,
+  "atRules": [
+    {
+      "name": "@theme",
+      "description": "Define custom theme variables for Tailwind v4."
+    },
+    {
+      "name": "@utility",
+      "description": "Register custom utility classes in Tailwind v4."
+    },
+    {
+      "name": "@custom-variant",
+      "description": "Define custom selector variants in Tailwind v4."
+    }
+  ]
+}

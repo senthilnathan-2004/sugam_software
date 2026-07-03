@@ -1,0 +1,301 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// User & RBAC
+model User {
+  id           String     @id @default(uuid())
+  name         String
+  email        String     @unique
+  passwordHash String
+  role         String     // ADMIN, DOCTOR, BILLING, RECEPTION
+  isActive     Boolean    @default(true)
+  avatar       String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  auditLogs    AuditLog[]
+  doctor       Doctor?
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action    String
+  entity    String
+  entityId  String?
+  metadata  String?  // JSON string
+  timestamp DateTime @default(now())
+}
+
+model AppSetting {
+  key       String   @id
+  value     String
+  type      String   // STRING, NUMBER, BOOLEAN
+  updatedAt DateTime @updatedAt
+}
+
+model Notification {
+  id                String   @id @default(uuid())
+  title             String
+  message           String
+  type              String   // SUCCESS, ERROR, WARNING, INFO, CRITICAL
+  priority          String   // HIGH, MEDIUM, LOW
+  category          String   // PATIENT, DOCTOR, INVENTORY, BILLING, SYSTEM, SECURITY, BACKUP
+  userId            String?  // Optional: if targeted to specific user
+  relatedEntityId   String?  // e.g. patientId, invoiceId, medicineId
+  relatedEntityType String?
+  isRead            Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([createdAt])
+  @@index([isRead])
+  @@index([category])
+  @@index([priority])
+}
+
+// Patients
+model Patient {
+  id                   String            @id @default(uuid())
+  patientId            String            @unique // format: P-XXXXX
+  name                 String
+  dob                  DateTime
+  age                  Int
+  gender               String
+  bloodGroup           String
+  phone                String
+  email                String?
+  address              String
+  emergencyContactName String
+  emergencyContactPhone String
+  photo                String?
+  isDeleted            Boolean           @default(false)
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  visits               PatientVisit[]
+  documents            PatientDocument[]
+  appointments         Appointment[]
+  prescriptions        Prescription[]
+  invoices             Invoice[]
+}
+
+model PatientVisit {
+  id             String    @id @default(uuid())
+  patientId      String
+  patient        Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctorId       String
+  date           DateTime  @default(now())
+  chiefComplaint String
+  diagnosis      String
+  notes          String
+  nextVisitDate  DateTime?
+}
+
+model PatientDocument {
+  id         String   @id @default(uuid())
+  patientId  String
+  patient    Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  type       String   // LAB_REPORT, SCAN, PRESCRIPTION, OTHER
+  filePath   String
+  fileName   String
+  uploadedAt DateTime @default(now())
+}
+
+// Doctors
+model Doctor {
+  id             String        @id @default(uuid())
+  userId         String        @unique
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  specialization String
+  license        String        @unique
+  qualification  String
+  schedule       String        // JSON string of weekday schedule
+  appointments   Appointment[]
+  consultations  Consultation[]
+  prescriptions  Prescription[]
+}
+
+model Appointment {
+  id           String        @id @default(uuid())
+  patientId    String
+  patient      Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctorId     String
+  doctor       Doctor        @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  date         DateTime
+  time         String
+  status       String        // PENDING, CONFIRMED, CANCELLED, COMPLETED
+  type         String        // FIRST_VISIT, FOLLOW_UP, EMERGENCY
+  consultation Consultation?
+}
+
+model Consultation {
+  id             String         @id @default(uuid())
+  appointmentId  String         @unique
+  appointment    Appointment    @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  doctorId       String
+  doctor         Doctor         @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  chiefComplaint String
+  diagnosis      String
+  notes          String
+  nextVisit      DateTime?
+  prescription   Prescription?
+  labRequest     LabRequest?
+}
+
+model Prescription {
+  id             String        @id @default(uuid())
+  consultationId String        @unique
+  consultation   Consultation  @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  doctorId       String
+  doctor         Doctor        @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  patientId      String
+  patient        Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  medicines      String        // JSON string of medicines list with dosage instructions
+  instructions   String?
+  createdAt      DateTime      @default(now())
+}
+
+model LabRequest {
+  id             String       @id @default(uuid())
+  consultationId String       @unique
+  consultation   Consultation @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  tests          String       // JSON array of test names
+  status         String       // PENDING, COMPLETED
+  results        String?      // JSON string of results
+  requestedAt    DateTime     @default(now())
+}
+
+// Inventory
+model MedicineCategory {
+  id          String     @id @default(uuid())
+  name        String     @unique
+  description String?
+  medicines   Medicine[]
+}
+
+model Supplier {
+  id             String          @id @default(uuid())
+  name           String          @unique
+  contact        String
+  email          String
+  address        String
+  gstNo          String          @unique
+  isActive       Boolean         @default(true)
+  medicines      Medicine[]
+  batches        MedicineBatch[]
+  purchaseOrders PurchaseOrder[]
+}
+
+model Medicine {
+  id           String            @id @default(uuid())
+  name         String            @unique
+  genericName  String
+  categoryId   String
+  category     MedicineCategory  @relation(fields: [categoryId], references: [id])
+  supplierId   String
+  supplier     Supplier          @relation(fields: [supplierId], references: [id])
+  barcode      String?           @unique
+  mrp          Float
+  sellingPrice Float
+  gstPercent   Float
+  unit         String            // TABLET, STRIP, BOTTLE, BOX
+  reorderLevel Int
+  isActive     Boolean           @default(true)
+  batches      MedicineBatch[]
+}
+
+model MedicineBatch {
+  id            String    @id @default(uuid())
+  medicineId    String
+  medicine      Medicine  @relation(fields: [medicineId], references: [id], onDelete: Cascade)
+  batchNo       String
+  mfgDate       DateTime
+  expiryDate    DateTime
+  quantity      Int
+  purchasePrice Float
+  supplierId    String
+  supplier      Supplier  @relation(fields: [supplierId], references: [id])
+
+  @@unique([medicineId, batchNo])
+}
+
+model PurchaseOrder {
+  id         String   @id @default(uuid())
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+  invoiceNo  String   @unique
+  date       DateTime
+  items      String   // JSON list of purchased batch items
+  subtotal   Float
+  gstAmount  Float
+  total      Float
+  status     String   // RECEIVED, CANCELLED
+}
+
+// Billing
+model Invoice {
+  id            String         @id @default(uuid())
+  invoiceNo     String         @unique // format: INV-XXXXX
+  patientId     String?
+  patient       Patient?       @relation(fields: [patientId], references: [id])
+  walkinName    String?
+  walkinPhone   String?
+  walkinEmail   String?
+  doctorId      String?
+  date          DateTime       @default(now())
+  items         String         // JSON list of billed medicines / consultation fees
+  subtotal      Float
+  gstAmount     Float
+  discount      Float
+  total         Float
+  paymentMode   String         // CASH, UPI, CARD, SPLIT
+  paymentStatus String         // PAID, PENDING
+  isReturn      Boolean        @default(false)
+  payments      Payment[]
+  returns       InvoiceReturn?
+}
+
+model Payment {
+  id        String   @id @default(uuid())
+  invoiceId String
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  mode      String   // CASH, UPI, CARD
+  amount    Float
+  reference String?
+  paidAt    DateTime @default(now())
+}
+
+model InvoiceReturn {
+  id           String   @id @default(uuid())
+  invoiceId    String   @unique
+  invoice      Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  reason       String
+  items        String   // JSON list of returned items
+  refundAmount Float
+  returnedAt   DateTime @default(now())
+}
+
+// Reports & Backup
+model DailySummary {
+  id             String   @id @default(uuid())
+  date           DateTime @unique
+  totalRevenue   Float
+  totalPatients  Int
+  newPatients    Int
+  totalMedicines Int
+}
+
+model Backup {
+  id        String   @id @default(uuid())
+  filePath  String
+  createdAt DateTime @default(now())
+  size      Int
+  type      String   // AUTO, MANUAL
+  status    String   // SUCCESS, FAILED
+}

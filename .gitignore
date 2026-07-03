@@ -1,0 +1,11 @@
+node_modules/
+.next/
+dist/
+.env
+prisma/dev.db
+*.dmg
+*.zip
+*.blockmap
+*.exe
+*.AppImage
+*.tsbuildinfo
