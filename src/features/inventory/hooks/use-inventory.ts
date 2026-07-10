@@ -135,6 +135,27 @@ export function useInventory() {
     return true;
   };
 
+  const savePurchasesBulk = async (dataArray: any[]) => {
+    setIsLoading(true);
+    let successCount = 0;
+    if (typeof window !== 'undefined' && window.electronAPI) {
+      try {
+        for (const data of dataArray) {
+          const res = await window.electronAPI.invoke('inventory:purchases:create', data);
+          if (res?.success) successCount++;
+        }
+        toast.success(`Imported ${successCount} purchases!`);
+        fetchPurchases();
+        return true;
+      } catch (e) {
+        toast.error('Error importing some purchases');
+      }
+    }
+    toast.success(`Imported ${dataArray.length} purchases (Demo Mode)`);
+    setIsLoading(false);
+    return true;
+  };
+
   const deleteSupplier = async (id: string) => {
     setIsLoading(true);
     if (typeof window !== 'undefined' && window.electronAPI) {
@@ -280,6 +301,7 @@ export function useInventory() {
     saveMedicine,
     saveMedicinesBulk,
     savePurchase,
+    savePurchasesBulk,
     deleteSupplier,
     deleteMedicine,
     deletePurchase,

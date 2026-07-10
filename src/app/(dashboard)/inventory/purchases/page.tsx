@@ -6,6 +6,7 @@ import { PageHeader } from '@/components/common/page-header';
 import { PurchaseTable } from '@/features/inventory/components/purchase-table';
 import { PurchaseForm } from '@/features/inventory/components/purchase-form';
 import { useInventory } from '@/features/inventory/hooks/use-inventory';
+import { ExcelImportExport } from '@/features/inventory/components/excel-import-export';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 
@@ -19,6 +20,7 @@ export default function PurchasesPage() {
     fetchSuppliers,
     fetchMedicines,
     savePurchase,
+    savePurchasesBulk,
     deletePurchase,
     updatePurchase,
   } = useInventory();
@@ -61,7 +63,13 @@ export default function PurchasesPage() {
         title="Purchase Orders Stock Inward"
         description="Log new batch shipments, monitor cost values, and update inventory units."
         actions={
-          <Dialog open={open} onOpenChange={(val) => {
+          <div className="flex items-center gap-3">
+            <ExcelImportExport 
+              dataToExport={purchases}
+              exportFileName="Purchases_Master"
+              onImport={savePurchasesBulk}
+            />
+            <Dialog open={open} onOpenChange={(val) => {
             setOpen(val);
             if (!val) setEditingPurchase(null);
           }}>
@@ -86,6 +94,7 @@ export default function PurchasesPage() {
               />
             </DialogContent>
           </Dialog>
+          </div>
         }
       />
 

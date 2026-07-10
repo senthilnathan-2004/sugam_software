@@ -84,9 +84,24 @@ export function registerInventoryIpc() {
 
   ipcMain.handle('inventory:medicines:create', async (_event: IpcMainInvokeEvent, data: any) => {
     try {
-      let categoryName = data.categoryId?.trim();
-      let category;
+      // Map keys to support both Form submissions and the Excel Upload structure
+      const name = data.name || data.MedicineName || data.ItemName;
+      const genericName = data.genericName || data.GenericName || 'N/A';
+      let categoryName = (data.categoryId || data.Category)?.trim();
+      const supplierId = data.supplierId || data.Supplier || null;
+      const barcode = data.barcode || data.ItemCode || data.Barcode || null;
+      
+      const mrp = parseFloat(data.mrp || data.MRP || 0);
+      const sellingPrice = parseFloat(data.sellingPrice || data.RetailPrice || data.SellingPrice || mrp);
+      const gstPercent = parseFloat(data.gstPercent || data.TaxPercentage || data.GST || 0);
+      const unit = data.unit || data.UnitOfMeasure || data.Unit || 'STRIP';
+      const reorderLevel = parseInt(data.reorderLevel || data.ReorderLevel || 10);
 
+      if (!name) {
+        throw new Error('Medicine name is required.');
+      }
+
+      let category;
       if (categoryName) {
         category = await prisma.medicineCategory.findFirst({
           where: { name: categoryName }
@@ -105,18 +120,36 @@ export function registerInventoryIpc() {
         }
       }
 
+      // We need a supplier. If none provided, find first or create one
+      let actualSupplierId = supplierId;
+      if (!actualSupplierId) {
+        let defaultSupplier = await prisma.supplier.findFirst();
+        if (!defaultSupplier) {
+           defaultSupplier = await prisma.supplier.create({
+             data: { 
+               name: 'Default Supplier', 
+               contact: 'N/A',
+               email: 'default@example.com',
+               address: 'N/A',
+               gstNo: 'N/A'
+             }
+           });
+        }
+        actualSupplierId = defaultSupplier.id;
+      }
+
       const m = await prisma.medicine.create({
         data: {
-          name: data.name,
-          genericName: data.genericName,
+          name,
+          genericName,
           categoryId: category.id,
-          supplierId: data.supplierId,
-          barcode: data.barcode || null,
-          mrp: parseFloat(data.mrp),
-          sellingPrice: parseFloat(data.sellingPrice),
-          gstPercent: parseFloat(data.gstPercent),
-          unit: data.unit,
-          reorderLevel: parseInt(data.reorderLevel),
+          supplierId: actualSupplierId,
+          barcode: barcode,
+          mrp: isNaN(mrp) ? 0 : mrp,
+          sellingPrice: isNaN(sellingPrice) ? 0 : sellingPrice,
+          gstPercent: isNaN(gstPercent) ? 0 : gstPercent,
+          unit,
+          reorderLevel: isNaN(reorderLevel) ? 10 : reorderLevel,
           isActive: true,
         },
       });
