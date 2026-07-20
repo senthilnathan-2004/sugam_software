@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useRef, useState } from 'react';
-import * as xlsx from 'xlsx';
 import { Download, Upload, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -15,11 +14,14 @@ export function ExcelImportExport({ dataToExport, exportFileName, onImport }: Ex
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isImporting, setIsImporting] = useState(false);
 
-  const handleExport = () => {
+  // xlsx is loaded on demand (dynamic import) so it stays out of the page's
+  // initial bundle until the user actually imports/exports.
+  const handleExport = async () => {
     if (!dataToExport || dataToExport.length === 0) {
       alert('No data available to export.');
       return;
     }
+    const xlsx = await import('xlsx');
     const worksheet = xlsx.utils.json_to_sheet(dataToExport);
     const workbook = xlsx.utils.book_new();
     xlsx.utils.book_append_sheet(workbook, worksheet, 'Data');
@@ -32,8 +34,9 @@ export function ExcelImportExport({ dataToExport, exportFileName, onImport }: Ex
 
     setIsImporting(true);
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       try {
+        const xlsx = await import('xlsx');
         const bstr = evt.target?.result;
         const workbook = xlsx.read(bstr, { type: 'binary' });
         const wsname = workbook.SheetNames[0];

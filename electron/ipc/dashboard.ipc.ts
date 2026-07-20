@@ -1,11 +1,11 @@
-import { ipcMain, IpcMainInvokeEvent } from 'electron';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { IpcMainInvokeEvent } from 'electron';
+import { handle } from './authorize.js';
+import { calculateAge } from '../age.js';
+import { prisma } from '../db.js';
 
 export function registerDashboardIpc() {
   // ─── Dashboard Stats ───────────────────────────────────────────────────────
-  ipcMain.handle('dashboard:stats', async (_event: IpcMainInvokeEvent) => {
+  handle('dashboard:stats', async (_event: IpcMainInvokeEvent) => {
     try {
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
@@ -75,7 +75,7 @@ export function registerDashboardIpc() {
   });
 
   // ─── Monthly Revenue (last 6 months) ──────────────────────────────────────
-  ipcMain.handle('dashboard:monthly-revenue', async (_event: IpcMainInvokeEvent) => {
+  handle('dashboard:monthly-revenue', async (_event: IpcMainInvokeEvent) => {
     try {
       const months: { month: string; revenue: number; patients: number; medicineSales: number }[] = [];
       for (let i = 5; i >= 0; i--) {
@@ -118,22 +118,26 @@ export function registerDashboardIpc() {
       return { success: true, data: months };
     } catch (error) {
       console.error('[dashboard:monthly-revenue] Error:', error);
-      // Return mock data for empty database demo
-      const mockMonths = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'];
-      return {
-        success: true,
-        data: mockMonths.map((month, i) => ({
-          month,
-          revenue: 45000 + Math.random() * 30000 * (i + 1),
-          patients: 30 + Math.floor(Math.random() * 40 * (i + 1)),
-          medicineSales: 15000 + Math.random() * 10000 * (i + 1),
-        })),
-      };
+      // NEVER fabricate financial data. On error, degrade to an honest all-zero
+      // 6-month series (the chart still renders, but shows no revenue rather
+      // than random numbers that could be mistaken for real takings).
+      const empty: { month: string; revenue: number; patients: number; medicineSales: number }[] = [];
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date();
+        d.setMonth(d.getMonth() - i);
+        empty.push({
+          month: new Date(d.getFullYear(), d.getMonth(), 1).toLocaleString('default', { month: 'short' }),
+          revenue: 0,
+          patients: 0,
+          medicineSales: 0,
+        });
+      }
+      return { success: true, data: empty };
     }
   });
 
   // ─── Today's Appointments List ─────────────────────────────────────────────
-  ipcMain.handle('dashboard:today-appointments', async (_event: IpcMainInvokeEvent) => {
+  handle('dashboard:today-appointments', async (_event: IpcMainInvokeEvent) => {
     try {
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
@@ -162,7 +166,7 @@ export function registerDashboardIpc() {
   });
 
   // ─── Recent Patients ───────────────────────────────────────────────────────
-  ipcMain.handle('dashboard:recent-patients', async (_event: IpcMainInvokeEvent) => {
+  handle('dashboard:recent-patients', async (_event: IpcMainInvokeEvent) => {
     try {
       const patients = await prisma.patient.findMany({
         where: { isDeleted: false },
@@ -172,21 +176,22 @@ export function registerDashboardIpc() {
           id: true,
           patientId: true,
           name: true,
-          age: true,
+          dob: true,
           gender: true,
           bloodGroup: true,
           phone: true,
           createdAt: true,
         },
       });
-      return { success: true, data: patients };
+      const withAge = patients.map((p) => ({ ...p, age: calculateAge(p.dob) }));
+      return { success: true, data: withAge };
     } catch {
       return { success: true, data: [] };
     }
   });
 
   // ─── Dashboard Notifications ────────────────────────────────────────────────
-  ipcMain.handle('dashboard:notifications', async (_event: IpcMainInvokeEvent) => {
+  handle('dashboard:notifications', async (_event: IpcMainInvokeEvent) => {
     try {
       const notifications = await prisma.notification.findMany({
         orderBy: { createdAt: 'desc' },
@@ -199,7 +204,7 @@ export function registerDashboardIpc() {
   });
 
   // ─── Recent Activities ─────────────────────────────────────────────────────
-  ipcMain.handle('dashboard:activities', async (_event: IpcMainInvokeEvent) => {
+  handle('dashboard:activities', async (_event: IpcMainInvokeEvent) => {
     try {
       const logs = await prisma.auditLog.findMany({
         orderBy: { timestamp: 'desc' },

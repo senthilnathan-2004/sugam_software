@@ -1,8 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "CommonJS",
-    "moduleResolution": "node",
+    // NodeNext emits CommonJS here (no "type":"module" in package.json), so the
+    // Electron main process stays CJS. Relative imports use explicit .js
+    // extensions as NodeNext requires. Replaces the deprecated node10 resolution.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "outDir": "./dist",
     "rootDir": "../",
     "strict": true,

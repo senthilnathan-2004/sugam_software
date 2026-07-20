@@ -1,16 +1,23 @@
-import { ipcMain, IpcMainInvokeEvent } from 'electron';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { IpcMainInvokeEvent } from 'electron';
+import { handle } from './authorize.js';
+import { prisma } from '../db.js';
+import { writeAudit } from '../audit.js';
+import type { Session } from '../session.js';
 
 export function registerNotificationIPC() {
   // ─── RBAC Helper ─────────────────────────────────────────────────────────
   const applyRoleFilter = (whereClause: any, role?: string) => {
     if (!role || role === 'ADMIN') return; // Admin sees all
     
-    // Define what each role can see
+    // Define what each role can see. Keys MUST match the app's actual role set
+    // (ADMIN, DOCTOR, BILLING, RECEPTION — see settings.ipc VALID_ROLES and the
+    // User.role schema comment); otherwise a valid user falls through to the
+    // SYSTEM-only fallback and never sees their own domain's notifications.
     const roleCategories: Record<string, string[]> = {
       DOCTOR: ['PATIENT', 'DOCTOR', 'SYSTEM'],
+      BILLING: ['BILLING', 'PATIENT', 'INVENTORY', 'SYSTEM'],
+      RECEPTION: ['PATIENT', 'BILLING', 'SYSTEM'],
+      // Legacy aliases kept so any older tokens/records still resolve sensibly.
       RECEPTIONIST: ['PATIENT', 'BILLING', 'SYSTEM'],
       PHARMACIST: ['INVENTORY', 'PATIENT', 'SYSTEM'],
       NURSE: ['PATIENT', 'SYSTEM'],
@@ -29,7 +36,7 @@ export function registerNotificationIPC() {
   };
 
   // ─── Fetch Notifications ────────────────────────────────────────────────
-  ipcMain.handle('notification:getAll', async (_event: IpcMainInvokeEvent, query?: any) => {
+  handle('notification:getAll', async (_event: IpcMainInvokeEvent, query: any, session: Session | null) => {
     try {
       const take = query?.limit ? Number(query.limit) : 50;
       const skip = query?.offset ? Number(query.offset) : 0;
@@ -44,7 +51,7 @@ export function registerNotificationIPC() {
         ];
       }
       
-      applyRoleFilter(where, query?.role);
+      applyRoleFilter(where, session?.role);
 
       const [notifications, total] = await Promise.all([
         prisma.notification.findMany({
@@ -64,10 +71,10 @@ export function registerNotificationIPC() {
   });
 
   // ─── Get Unread Count ──────────────────────────────────────────────────
-  ipcMain.handle('notification:getUnreadCount', async (_event: IpcMainInvokeEvent, query?: any) => {
+  handle('notification:getUnreadCount', async (_event: IpcMainInvokeEvent, query: any, session: Session | null) => {
     try {
       const where: any = { isRead: false };
-      applyRoleFilter(where, query?.role);
+      applyRoleFilter(where, session?.role);
       
       const count = await prisma.notification.count({ where });
       return { success: true, data: count };
@@ -78,7 +85,7 @@ export function registerNotificationIPC() {
   });
 
   // ─── Mark Read / Unread ────────────────────────────────────────────────
-  ipcMain.handle('notification:markRead', async (_event: IpcMainInvokeEvent, id?: string) => {
+  handle('notification:markRead', async (_event: IpcMainInvokeEvent, id: string | undefined, session: Session | null) => {
     try {
       if (id) {
         await prisma.notification.update({
@@ -86,8 +93,11 @@ export function registerNotificationIPC() {
           data: { isRead: true },
         });
       } else {
+        // "Mark all read" must not reach across other roles' domains.
+        const where: any = { isRead: false };
+        applyRoleFilter(where, session?.role);
         await prisma.notification.updateMany({
-          where: { isRead: false },
+          where,
           data: { isRead: true },
         });
       }
@@ -98,7 +108,7 @@ export function registerNotificationIPC() {
     }
   });
 
-  ipcMain.handle('notification:markUnread', async (_event: IpcMainInvokeEvent, id: string) => {
+  handle('notification:markUnread', async (_event: IpcMainInvokeEvent, id: string) => {
     try {
       await prisma.notification.update({
         where: { id },
@@ -112,13 +122,18 @@ export function registerNotificationIPC() {
   });
 
   // ─── Delete ────────────────────────────────────────────────────────────
-  ipcMain.handle('notification:delete', async (_event: IpcMainInvokeEvent, id?: string) => {
+  handle('notification:delete', async (_event: IpcMainInvokeEvent, id: string | undefined, session: Session | null) => {
     try {
       if (id) {
         await prisma.notification.delete({ where: { id } });
       } else {
-        await prisma.notification.deleteMany({});
+        // "Clear all" must be scoped to what this role can see, so a non-admin
+        // cannot wipe every user's notifications (SECURITY/BACKUP included).
+        const where: any = {};
+        applyRoleFilter(where, session?.role);
+        await prisma.notification.deleteMany({ where });
       }
+      await writeAudit(session, 'DELETE', 'Notification', id ?? null);
       return { success: true };
     } catch (error) {
       console.error('[notification:delete] Error:', error);
@@ -127,7 +142,7 @@ export function registerNotificationIPC() {
   });
 
   // ─── Create Notification (Internal utility via IPC for convenience) ────
-  ipcMain.handle('notification:create', async (_event: IpcMainInvokeEvent, data: any) => {
+  handle('notification:create', async (_event: IpcMainInvokeEvent, data: any) => {
     try {
       const notif = await prisma.notification.create({
         data: {

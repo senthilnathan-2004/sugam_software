@@ -43,7 +43,11 @@ export function useBilling() {
           toast.error(res?.error ?? 'Failed to create invoice.');
           return { success: false };
         }
-      } catch {
+      } catch (err) {
+        // invoke() itself rejected (channel blocked / main-process fault). Never
+        // fail silently — that makes the checkout button look dead to the cashier.
+        console.error('[saveInvoice] IPC rejected:', err);
+        toast.error('Checkout failed — could not reach the billing service. Please retry.');
         return { success: false };
       } finally {
         setIsLoading(false);
@@ -107,6 +111,28 @@ export function useBilling() {
     setIsLoading(false);
   }, []);
 
+  const shareInvoiceWhatsApp = async (phone: string, message: string) => {
+    if (typeof window !== 'undefined' && window.electronAPI) {
+      try {
+        const res = await window.electronAPI.invoke('billing:whatsapp:share', { phone, message });
+        if (res?.success) {
+          toast.success('Opening WhatsApp…');
+          return true;
+        }
+        toast.error(res?.error ?? 'Failed to share on WhatsApp.');
+        return false;
+      } catch {
+        toast.error('Failed to share on WhatsApp.');
+        return false;
+      }
+    }
+    // Web/demo fallback — open wa.me directly in a new tab.
+    const digits = String(phone).replace(/\D/g, '');
+    const num = digits.length === 10 ? '91' + digits : digits;
+    window.open(`https://wa.me/${num}?text=${encodeURIComponent(message)}`, '_blank');
+    return true;
+  };
+
   const exportInvoices = async () => {
     setIsLoading(true);
     if (typeof window !== 'undefined' && window.electronAPI) {
@@ -151,6 +177,7 @@ export function useBilling() {
     prescribedMedicines,
     consultationDetails,
     fetchPatientPrescriptions,
+    shareInvoiceWhatsApp,
     exportInvoices,
     importInvoices,
   };

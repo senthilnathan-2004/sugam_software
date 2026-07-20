@@ -71,7 +71,14 @@ export function useInventory() {
           fetchSuppliers();
           return true;
         }
-      } catch {}
+        toast.error(res?.error ?? 'Failed to create supplier.');
+        return false;
+      } catch {
+        toast.error('Failed to create supplier.');
+        return false;
+      } finally {
+        setIsLoading(false);
+      }
     }
     toast.success('Supplier created (Demo Mode)');
     setIsLoading(false);
@@ -88,7 +95,14 @@ export function useInventory() {
           fetchMedicines();
           return true;
         }
-      } catch {}
+        toast.error(res?.error ?? 'Failed to create medicine.');
+        return false;
+      } catch {
+        toast.error('Failed to create medicine.');
+        return false;
+      } finally {
+        setIsLoading(false);
+      }
     }
     toast.success('Medicine created (Demo Mode)');
     setIsLoading(false);
@@ -99,18 +113,23 @@ export function useInventory() {
     setIsLoading(true);
     let successCount = 0;
     if (typeof window !== 'undefined' && window.electronAPI) {
-      // For a real app, you'd send an array to a bulk create IPC handler.
-      // Here we just loop or pretend to bulk save.
       try {
         for (const data of dataArray) {
           const res = await window.electronAPI.invoke('inventory:medicines:create', data);
           if (res?.success) successCount++;
         }
-        toast.success(`Imported ${successCount} medicines!`);
+        if (successCount === dataArray.length) {
+          toast.success(`Imported ${successCount} medicines!`);
+        } else {
+          toast.error(`Imported ${successCount} of ${dataArray.length} medicines; ${dataArray.length - successCount} failed.`);
+        }
         fetchMedicines();
-        return true;
+        return successCount > 0;
       } catch (e) {
-        toast.error('Error importing some medicines');
+        toast.error('Error importing medicines.');
+        return false;
+      } finally {
+        setIsLoading(false);
       }
     }
     toast.success(`Imported ${dataArray.length} medicines (Demo Mode)`);
@@ -128,7 +147,14 @@ export function useInventory() {
           fetchPurchases();
           return true;
         }
-      } catch {}
+        toast.error(res?.error ?? 'Failed to log purchase order.');
+        return false;
+      } catch {
+        toast.error('Failed to log purchase order.');
+        return false;
+      } finally {
+        setIsLoading(false);
+      }
     }
     toast.success('Purchase logged successfully (Demo Mode)');
     setIsLoading(false);
@@ -144,11 +170,18 @@ export function useInventory() {
           const res = await window.electronAPI.invoke('inventory:purchases:create', data);
           if (res?.success) successCount++;
         }
-        toast.success(`Imported ${successCount} purchases!`);
+        if (successCount === dataArray.length) {
+          toast.success(`Imported ${successCount} purchases!`);
+        } else {
+          toast.error(`Imported ${successCount} of ${dataArray.length} purchases; ${dataArray.length - successCount} failed.`);
+        }
         fetchPurchases();
-        return true;
+        return successCount > 0;
       } catch (e) {
-        toast.error('Error importing some purchases');
+        toast.error('Error importing purchases.');
+        return false;
+      } finally {
+        setIsLoading(false);
       }
     }
     toast.success(`Imported ${dataArray.length} purchases (Demo Mode)`);
@@ -165,18 +198,20 @@ export function useInventory() {
           toast.success('Supplier deleted successfully!');
           fetchSuppliers();
           return true;
-        } else {
-          toast.error(res?.error || 'Failed to delete supplier');
         }
+        toast.error(res?.error || 'Failed to delete supplier');
+        return false;
       } catch {
         toast.error('Error connecting to backend');
+        return false;
+      } finally {
+        setIsLoading(false);
       }
-    } else {
-      setSuppliers(prev => prev.filter(s => s.id !== id));
-      toast.success('Supplier deleted (Demo Mode)');
     }
+    setSuppliers(prev => prev.filter(s => s.id !== id));
+    toast.success('Supplier deleted (Demo Mode)');
     setIsLoading(false);
-    return false;
+    return true;
   };
 
   const deleteMedicine = async (id: string) => {
@@ -188,18 +223,20 @@ export function useInventory() {
           toast.success('Medicine deleted successfully!');
           fetchMedicines();
           return true;
-        } else {
-          toast.error(res?.error || 'Failed to delete medicine');
         }
+        toast.error(res?.error || 'Failed to delete medicine');
+        return false;
       } catch {
         toast.error('Error connecting to backend');
+        return false;
+      } finally {
+        setIsLoading(false);
       }
-    } else {
-      setMedicines(prev => prev.filter(m => m.id !== id));
-      toast.success('Medicine deleted (Demo Mode)');
     }
+    setMedicines(prev => prev.filter(m => m.id !== id));
+    toast.success('Medicine deleted (Demo Mode)');
     setIsLoading(false);
-    return false;
+    return true;
   };
 
   const deletePurchase = async (id: string) => {
@@ -211,18 +248,20 @@ export function useInventory() {
           toast.success('Purchase order deleted successfully!');
           fetchPurchases();
           return true;
-        } else {
-          toast.error(res?.error || 'Failed to delete purchase order');
         }
+        toast.error(res?.error || 'Failed to delete purchase order');
+        return false;
       } catch {
         toast.error('Error connecting to backend');
+        return false;
+      } finally {
+        setIsLoading(false);
       }
-    } else {
-      setPurchases(prev => prev.filter(p => p.id !== id));
-      toast.success('Purchase order deleted (Demo Mode)');
     }
+    setPurchases(prev => prev.filter(p => p.id !== id));
+    toast.success('Purchase order deleted (Demo Mode)');
     setIsLoading(false);
-    return false;
+    return true;
   };
 
   const updateSupplier = async (id: string, data: any) => {
@@ -234,11 +273,14 @@ export function useInventory() {
           toast.success('Supplier updated successfully!');
           fetchSuppliers();
           return true;
-        } else {
-          toast.error(res?.error || 'Failed to update supplier');
         }
+        toast.error(res?.error || 'Failed to update supplier');
+        return false;
       } catch {
         toast.error('Error connecting to backend');
+        return false;
+      } finally {
+        setIsLoading(false);
       }
     }
     setIsLoading(false);
@@ -254,11 +296,14 @@ export function useInventory() {
           toast.success('Medicine updated successfully!');
           fetchMedicines();
           return true;
-        } else {
-          toast.error(res?.error || 'Failed to update medicine');
         }
+        toast.error(res?.error || 'Failed to update medicine');
+        return false;
       } catch {
         toast.error('Error connecting to backend');
+        return false;
+      } finally {
+        setIsLoading(false);
       }
     }
     setIsLoading(false);
@@ -274,11 +319,14 @@ export function useInventory() {
           toast.success('Purchase order updated successfully!');
           fetchPurchases();
           return true;
-        } else {
-          toast.error(res?.error || 'Failed to update purchase order');
         }
+        toast.error(res?.error || 'Failed to update purchase order');
+        return false;
       } catch {
         toast.error('Error connecting to backend');
+        return false;
+      } finally {
+        setIsLoading(false);
       }
     }
     setIsLoading(false);

@@ -8,6 +8,17 @@ import type { LoginCredentials } from '../types/auth.types';
 
 const INACTIVITY_CHECK_INTERVAL_MS = 60 * 1000; // Check every 1 minute
 
+// Revoke the server-side session BEFORE clearing local state, so preload can
+// still read the token from localStorage and attach it to the logout call.
+// Best-effort: never block sign-out on it (e.g. in browser/demo mode).
+function revokeServerSession() {
+  try {
+    window.electronAPI?.invoke('auth:logout')?.catch(() => {});
+  } catch {
+    /* ignore */
+  }
+}
+
 export function useAuth() {
   const router = useRouter();
   const { user, isAuthenticated, login, logout, updateActivity, isInactive, hasPermission } =
@@ -23,6 +34,7 @@ export function useAuth() {
         toast.warning('Session expired', {
           description: 'You have been signed out due to inactivity.',
         });
+        revokeServerSession();
         logout();
         router.replace('/login');
       }
@@ -70,6 +82,7 @@ export function useAuth() {
   );
 
   const handleLogout = useCallback(() => {
+    revokeServerSession();
     logout();
     router.replace('/login');
     toast.info('You have been signed out.');

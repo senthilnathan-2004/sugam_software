@@ -9,6 +9,7 @@ import { formatCurrency } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { ConfirmDialog } from '@/components/common/confirm-dialog';
 
 interface PurchaseTableProps {
   data: PurchaseOrder[];
@@ -19,6 +20,7 @@ interface PurchaseTableProps {
 
 export function PurchaseTable({ data, isLoading, onDelete, onEdit }: PurchaseTableProps) {
   const [viewPO, setViewPO] = useState<PurchaseOrder | null>(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const columns: ColumnDef<PurchaseOrder>[] = [
     {
@@ -74,11 +76,7 @@ export function PurchaseTable({ data, isLoading, onDelete, onEdit }: PurchaseTab
               </Button>
             )}
             {onDelete && (
-              <Button variant="ghost" size="icon" onClick={() => {
-                if (window.confirm('Are you sure you want to delete this purchase order?')) {
-                  onDelete(po.id);
-                }
-              }}>
+              <Button variant="ghost" size="icon" onClick={() => setDeleteId(po.id)}>
                 <Trash2 className="h-4 w-4 text-red-500" />
               </Button>
             )}
@@ -139,6 +137,19 @@ export function PurchaseTable({ data, isLoading, onDelete, onEdit }: PurchaseTab
           )}
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!deleteId}
+        onOpenChange={(open) => !open && setDeleteId(null)}
+        title="Delete Purchase Order"
+        description="This will permanently remove the purchase order from your records. This action cannot be undone."
+        confirmText="Delete"
+        variant="danger"
+        onConfirm={() => {
+          if (deleteId) onDelete?.(deleteId);
+          setDeleteId(null);
+        }}
+      />
     </>
   );
 }

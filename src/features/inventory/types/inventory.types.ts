@@ -27,6 +27,8 @@ export interface Medicine {
   sellingPrice: number;
   gstPercent: number;
   unit: string;
+  /** Base units (tablets) per pack/strip; 1 = sold whole. Stock and billing quantities count base units. */
+  unitsPerPack: number;
   reorderLevel: number;
   isActive: boolean;
   totalStock?: number;

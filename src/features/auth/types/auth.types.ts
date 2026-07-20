@@ -64,6 +64,6 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   RECEPTION: [
     'patients:read', 'patients:write',
     'doctors:read',
-    'billing:read',
+    'billing:read', 'billing:write',
   ],
 };

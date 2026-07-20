@@ -54,9 +54,7 @@ export function Sidebar() {
         {/* Sidebar Header Logo */}
         <div className="h-16 flex items-center justify-between px-5 border-b border-sidebar-hover">
           <div className="flex items-center gap-3 overflow-hidden">
-            <div className="h-8 w-8 bg-primary rounded-lg flex items-center justify-center font-bold text-white shrink-0">
-              S
-            </div>
+            <img src="/logo.png" alt="Sugam HMS" className="h-9 w-9 rounded-lg object-contain bg-white p-0.5 shrink-0" />
             {sidebarOpen && (
               <span className="font-extrabold tracking-tight text-white text-base truncate">
                 Sugam HMS
@@ -113,7 +111,7 @@ export function Sidebar() {
 
         {/* User profile card */}
         {sidebarOpen && user && (
-          <div className="bg-sidebar-hover/40 p-3 rounded-xl border border-sidebar-hover flex items-center gap-3 transition-colors duration-150">
+          <div className="bg-sidebar-hover/40 p-3 rounded-xl flex items-center gap-3 transition-colors duration-150">
             <div className="h-9 w-9 rounded-full bg-primary/20 flex items-center justify-center font-bold text-white uppercase">
               {user.name.charAt(0)}
             </div>

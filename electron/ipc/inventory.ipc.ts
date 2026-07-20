@@ -1,13 +1,15 @@
-import { ipcMain, IpcMainInvokeEvent, dialog } from 'electron';
-import { PrismaClient } from '@prisma/client';
+import { IpcMainInvokeEvent, dialog } from 'electron';
+import { handle } from './authorize.js';
 import * as fs from 'fs';
 import * as xlsx from 'xlsx';
-
-const prisma = new PrismaClient();
+import { prisma } from '../db.js';
+import { writeAudit } from '../audit.js';
+import type { Session } from '../session.js';
+import { SupplierCreateSchema, SupplierUpdateSchema } from './schemas/inventory.js';
 
 export function registerInventoryIpc() {
   // ─── Categories ───────────────────────────────────────────────────────────
-  ipcMain.handle('inventory:categories:list', async () => {
+  handle('inventory:categories:list', async () => {
     try {
       return { success: true, data: await prisma.medicineCategory.findMany() };
     } catch {
@@ -16,7 +18,7 @@ export function registerInventoryIpc() {
   });
 
   // ─── Suppliers CRUD ───────────────────────────────────────────────────────
-  ipcMain.handle('inventory:suppliers:list', async () => {
+  handle('inventory:suppliers:list', async () => {
     try {
       const suppliers = await prisma.supplier.findMany({ where: { isActive: true } });
       return { success: true, data: suppliers };
@@ -25,28 +27,43 @@ export function registerInventoryIpc() {
     }
   });
 
-  ipcMain.handle('inventory:suppliers:create', async (_event: IpcMainInvokeEvent, data: any) => {
+  handle('inventory:suppliers:create', async (_event: IpcMainInvokeEvent, data: any, session: Session | null) => {
+    // Whitelist + validate: zod strips any extra keys, killing mass-assignment.
+    const parsed = SupplierCreateSchema.safeParse(data);
+    if (!parsed.success) {
+      return { success: false, error: parsed.error.issues[0]?.message ?? 'Invalid supplier data.' };
+    }
     try {
-      const s = await prisma.supplier.create({ data });
+      const s = await prisma.supplier.create({ data: parsed.data });
+      await writeAudit(session, 'CREATE', 'Supplier', s.id);
       return { success: true, data: s };
     } catch {
       return { success: false, error: 'Failed to create supplier.' };
     }
   });
 
-  ipcMain.handle('inventory:suppliers:update', async (_event: IpcMainInvokeEvent, payload: { id: string, data: any }) => {
+  handle('inventory:suppliers:update', async (_event: IpcMainInvokeEvent, payload: { id: string, data: any }, session: Session | null) => {
+    const id = payload?.id;
+    if (!id || typeof id !== 'string') {
+      return { success: false, error: 'Supplier id is required.' };
+    }
+    const parsed = SupplierUpdateSchema.safeParse(payload?.data);
+    if (!parsed.success) {
+      return { success: false, error: parsed.error.issues[0]?.message ?? 'Invalid supplier data.' };
+    }
     try {
-      const { id, data } = payload;
-      const s = await prisma.supplier.update({ where: { id }, data });
+      const s = await prisma.supplier.update({ where: { id }, data: parsed.data });
+      await writeAudit(session, 'UPDATE', 'Supplier', id);
       return { success: true, data: s };
     } catch {
       return { success: false, error: 'Failed to update supplier.' };
     }
   });
 
-  ipcMain.handle('inventory:suppliers:delete', async (_event: IpcMainInvokeEvent, id: string) => {
+  handle('inventory:suppliers:delete', async (_event: IpcMainInvokeEvent, id: string, session: Session | null) => {
     try {
       await prisma.supplier.delete({ where: { id } });
+      await writeAudit(session, 'DELETE', 'Supplier', id);
       return { success: true };
     } catch {
       return { success: false, error: 'Failed to delete supplier.' };
@@ -54,7 +71,7 @@ export function registerInventoryIpc() {
   });
 
   // ─── Medicine CRUD ────────────────────────────────────────────────────────
-  ipcMain.handle('inventory:medicines:list', async () => {
+  handle('inventory:medicines:list', async () => {
     try {
       const medicines = await prisma.medicine.findMany({
         where: { isActive: true },
@@ -82,7 +99,7 @@ export function registerInventoryIpc() {
     }
   });
 
-  ipcMain.handle('inventory:medicines:create', async (_event: IpcMainInvokeEvent, data: any) => {
+  handle('inventory:medicines:create', async (_event: IpcMainInvokeEvent, data: any, session: Session | null) => {
     try {
       // Map keys to support both Form submissions and the Excel Upload structure
       const name = data.name || data.MedicineName || data.ItemName;
@@ -95,6 +112,9 @@ export function registerInventoryIpc() {
       const sellingPrice = parseFloat(data.sellingPrice || data.RetailPrice || data.SellingPrice || mrp);
       const gstPercent = parseFloat(data.gstPercent || data.TaxPercentage || data.GST || 0);
       const unit = data.unit || data.UnitOfMeasure || data.Unit || 'STRIP';
+      // Tablets per strip/pack. Stock + billing count single tablets; selling
+      // price stays per pack, so this must never be 0 (it is a divisor).
+      const unitsPerPack = Math.max(1, parseInt(data.unitsPerPack || data.UnitsPerPack || data.TabletsPerStrip || 1) || 1);
       const reorderLevel = parseInt(data.reorderLevel || data.ReorderLevel || 10);
 
       if (!name) {
@@ -104,7 +124,10 @@ export function registerInventoryIpc() {
       let category;
       if (categoryName) {
         category = await prisma.medicineCategory.findFirst({
-          where: { name: categoryName }
+          // On create the form sends a category NAME; on edit it sends the
+          // existing category's id (UUID). Match either so editing a medicine
+          // never spawns a junk category named after the id.
+          where: { OR: [{ id: categoryName }, { name: categoryName }] }
         });
         if (!category) {
           category = await prisma.medicineCategory.create({
@@ -149,10 +172,12 @@ export function registerInventoryIpc() {
           sellingPrice: isNaN(sellingPrice) ? 0 : sellingPrice,
           gstPercent: isNaN(gstPercent) ? 0 : gstPercent,
           unit,
+          unitsPerPack,
           reorderLevel: isNaN(reorderLevel) ? 10 : reorderLevel,
           isActive: true,
         },
       });
+      await writeAudit(session, 'CREATE', 'Medicine', m.id);
       return { success: true, data: m };
     } catch (error) {
       console.error('[inventory:medicines:create] Error:', error);
@@ -160,7 +185,7 @@ export function registerInventoryIpc() {
     }
   });
 
-  ipcMain.handle('inventory:medicines:update', async (_event: IpcMainInvokeEvent, payload: { id: string, data: any }) => {
+  handle('inventory:medicines:update', async (_event: IpcMainInvokeEvent, payload: { id: string, data: any }, session: Session | null) => {
     try {
       const { id, data } = payload;
       let categoryName = data.categoryId?.trim();
@@ -168,7 +193,10 @@ export function registerInventoryIpc() {
 
       if (categoryName) {
         category = await prisma.medicineCategory.findFirst({
-          where: { name: categoryName }
+          // On create the form sends a category NAME; on edit it sends the
+          // existing category's id (UUID). Match either so editing a medicine
+          // never spawns a junk category named after the id.
+          where: { OR: [{ id: categoryName }, { name: categoryName }] }
         });
         if (!category) {
           category = await prisma.medicineCategory.create({
@@ -176,6 +204,17 @@ export function registerInventoryIpc() {
           });
         }
       }
+
+      // Guard every numeric coercion: an omitted/blank field must not write NaN
+      // into a Float/Int column (mirrors the create handler's isNaN checks).
+      const num = (v: any, fallback: number) => {
+        const n = parseFloat(v);
+        return isNaN(n) ? fallback : n;
+      };
+      const int = (v: any, fallback: number) => {
+        const n = parseInt(v, 10);
+        return isNaN(n) ? fallback : n;
+      };
 
       const m = await prisma.medicine.update({
         where: { id },
@@ -185,13 +224,15 @@ export function registerInventoryIpc() {
           ...(category && { categoryId: category.id }),
           supplierId: data.supplierId,
           barcode: data.barcode || null,
-          mrp: parseFloat(data.mrp),
-          sellingPrice: parseFloat(data.sellingPrice),
-          gstPercent: parseFloat(data.gstPercent),
+          mrp: num(data.mrp, 0),
+          sellingPrice: num(data.sellingPrice, 0),
+          gstPercent: num(data.gstPercent, 0),
           unit: data.unit,
-          reorderLevel: parseInt(data.reorderLevel),
+          unitsPerPack: Math.max(1, int(data.unitsPerPack, 1)),
+          reorderLevel: int(data.reorderLevel, 10),
         },
       });
+      await writeAudit(session, 'UPDATE', 'Medicine', payload.id);
       return { success: true, data: m };
     } catch (error) {
       console.error('[inventory:medicines:update] Error:', error);
@@ -199,9 +240,10 @@ export function registerInventoryIpc() {
     }
   });
 
-  ipcMain.handle('inventory:medicines:delete', async (_event: IpcMainInvokeEvent, id: string) => {
+  handle('inventory:medicines:delete', async (_event: IpcMainInvokeEvent, id: string, session: Session | null) => {
     try {
       await prisma.medicine.delete({ where: { id } });
+      await writeAudit(session, 'DELETE', 'Medicine', id);
       return { success: true };
     } catch (error) {
       console.error('[inventory:medicines:delete] Error:', error);
@@ -210,7 +252,7 @@ export function registerInventoryIpc() {
   });
 
   // ─── Purchase Orders CRUD ─────────────────────────────────────────────────
-  ipcMain.handle('inventory:purchases:list', async () => {
+  handle('inventory:purchases:list', async () => {
     try {
       const purchases = await prisma.purchaseOrder.findMany({
         include: { supplier: { select: { name: true } } },
@@ -226,7 +268,7 @@ export function registerInventoryIpc() {
     }
   });
 
-  ipcMain.handle('inventory:purchases:create', async (_event: IpcMainInvokeEvent, data: any) => {
+  handle('inventory:purchases:create', async (_event: IpcMainInvokeEvent, data: any, session: Session | null) => {
     try {
       const { supplierId, invoiceNo, items, subtotal, gstAmount, total } = data;
 
@@ -262,6 +304,7 @@ export function registerInventoryIpc() {
         return po;
       });
 
+      await writeAudit(session, 'CREATE', 'PurchaseOrder', result.id);
       return { success: true, data: result };
     } catch (error) {
       console.error('[inventory:purchases:create] Error:', error);
@@ -269,7 +312,7 @@ export function registerInventoryIpc() {
     }
   });
 
-  ipcMain.handle('inventory:purchases:update', async (_event: IpcMainInvokeEvent, payload: { id: string, data: any }) => {
+  handle('inventory:purchases:update', async (_event: IpcMainInvokeEvent, payload: { id: string, data: any }, session: Session | null) => {
     try {
       const { id, data } = payload;
       const { supplierId, invoiceNo, subtotal, gstAmount, total } = data;
@@ -284,6 +327,7 @@ export function registerInventoryIpc() {
           total: parseFloat(total),
         },
       });
+      await writeAudit(session, 'UPDATE', 'PurchaseOrder', payload.id);
       return { success: true, data: po };
     } catch (error) {
       console.error('[inventory:purchases:update] Error:', error);
@@ -291,9 +335,10 @@ export function registerInventoryIpc() {
     }
   });
 
-  ipcMain.handle('inventory:purchases:delete', async (_event: IpcMainInvokeEvent, id: string) => {
+  handle('inventory:purchases:delete', async (_event: IpcMainInvokeEvent, id: string, session: Session | null) => {
     try {
       await prisma.purchaseOrder.delete({ where: { id } });
+      await writeAudit(session, 'DELETE', 'PurchaseOrder', id);
       return { success: true };
     } catch (error) {
       console.error('[inventory:purchases:delete] Error:', error);
@@ -302,7 +347,7 @@ export function registerInventoryIpc() {
   });
 
   // ─── Expiry & Stock Level Alerts ──────────────────────────────────────────
-  ipcMain.handle('inventory:alerts', async () => {
+  handle('inventory:alerts', async () => {
     try {
       const [lowStock, expiring] = await Promise.all([
         // Medicines where total stock is below reorderLevel
@@ -356,7 +401,7 @@ export function registerInventoryIpc() {
   });
 
   // ─── Inventory Analytics for Reports Page ─────────────────────────────────
-  ipcMain.handle('inventory:reports:analytics', async () => {
+  handle('inventory:reports:analytics', async () => {
     try {
       // 1. Stock by Category
       const categories = await prisma.medicineCategory.findMany({
@@ -462,7 +507,7 @@ export function registerInventoryIpc() {
   });
 
   // ─── Export Inventory Reports to Excel ────────────────────────────────────
-  ipcMain.handle('inventory:reports:export', async () => {
+  handle('inventory:reports:export', async () => {
     try {
       // Re-use logic from analytics for stock by category
       const categories = await prisma.medicineCategory.findMany({

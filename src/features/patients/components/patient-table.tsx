@@ -71,7 +71,7 @@ export function PatientTable({ data, isLoading, onDelete }: PatientTableProps) {
               className="h-8 w-8 text-slate-500 hover:text-primary hover:bg-slate-100"
               onClick={(e) => {
                 e.stopPropagation();
-                router.push(`/patients/${patient.id}`);
+                router.push(`/patients/detail?id=${patient.id}`);
               }}
             >
               <Eye className="h-4 w-4" />
@@ -113,7 +113,7 @@ export function PatientTable({ data, isLoading, onDelete }: PatientTableProps) {
       columns={columns}
       data={data}
       isLoading={isLoading}
-      onRowClick={(row) => router.push(`/patients/${row.id}`)}
+      onRowClick={(row) => router.push(`/patients/detail?id=${row.id}`)}
     />
   );
 }

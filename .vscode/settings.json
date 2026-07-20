@@ -2,6 +2,8 @@
   "recommendations": [
     "tailwindcss.tailwindcss-data-provider"
   ],
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
   "css.customData": [
     ".vscode/tailwindcss-custom-data.json"
   ],

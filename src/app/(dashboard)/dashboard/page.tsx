@@ -1,10 +1,8 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { KpiGrid } from '@/features/dashboard/components/kpi-grid';
-import { RevenueChart } from '@/features/dashboard/components/revenue-chart';
-import { PatientChart } from '@/features/dashboard/components/patient-chart';
-import { MedicineSalesChart } from '@/features/dashboard/components/medicine-sales-chart';
 import { TodayAppointments } from '@/features/dashboard/components/today-appointments';
 import { RecentPatients } from '@/features/dashboard/components/recent-patients';
 import { QuickActions } from '@/features/dashboard/components/quick-actions';
@@ -15,6 +13,23 @@ import { useAuth } from '@/features/auth/hooks/use-auth';
 import { RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/common/page-header';
+
+// Charts pull in recharts (a large charting lib). Load them lazily so the
+// dashboard's first paint (KPIs + widgets) isn't blocked on recharts; a
+// placeholder holds the layout until each chart's chunk arrives.
+const ChartFallback = () => <div className="h-72 w-full animate-pulse rounded-hms bg-slate-100" />;
+const RevenueChart = dynamic(
+  () => import('@/features/dashboard/components/revenue-chart').then((m) => m.RevenueChart),
+  { ssr: false, loading: ChartFallback }
+);
+const MedicineSalesChart = dynamic(
+  () => import('@/features/dashboard/components/medicine-sales-chart').then((m) => m.MedicineSalesChart),
+  { ssr: false, loading: ChartFallback }
+);
+const PatientChart = dynamic(
+  () => import('@/features/dashboard/components/patient-chart').then((m) => m.PatientChart),
+  { ssr: false, loading: ChartFallback }
+);
 
 export default function DashboardPage() {
   const { user } = useAuth();

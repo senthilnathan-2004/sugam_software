@@ -1,11 +1,10 @@
-import { ipcMain, IpcMainInvokeEvent } from 'electron';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { IpcMainInvokeEvent } from 'electron';
+import { handle } from './authorize.js';
+import { prisma } from '../db.js';
 
 export function registerReportsIpc() {
   // ─── Revenue & Invoices Report ─────────────────────────────────────────────
-  ipcMain.handle(
+  handle(
     'reports:revenue',
     async (_event: IpcMainInvokeEvent, payload: { startDate: string; endDate: string }) => {
       try {
@@ -102,7 +101,7 @@ export function registerReportsIpc() {
   );
 
   // ─── Patient Traffic & Registrations Report ────────────────────────────────
-  ipcMain.handle(
+  handle(
     'reports:patients',
     async (_event: IpcMainInvokeEvent, payload: { startDate: string; endDate: string }) => {
       try {
@@ -168,7 +167,7 @@ export function registerReportsIpc() {
   );
 
   // ─── Inventory Stock Level Valuation Report ────────────────────────────────
-  ipcMain.handle('reports:inventory', async () => {
+  handle('reports:inventory', async () => {
     try {
       const medicines = await prisma.medicine.findMany({
         where: { isActive: true },
@@ -219,7 +218,7 @@ export function registerReportsIpc() {
     }
   });
   // ─── Doctor Performance Report ───────────────────────────────────────────────
-  ipcMain.handle(
+  handle(
     'reports:doctors',
     async (_event: IpcMainInvokeEvent, payload: { startDate: string; endDate: string }) => {
       try {

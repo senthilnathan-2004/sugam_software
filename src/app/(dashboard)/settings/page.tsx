@@ -44,6 +44,7 @@ export default function SettingsPage() {
     fetchSettings,
     fetchBackups,
     updateSettings,
+    saveBackupSettings,
     changePassword,
     createBackup,
     restoreBackup,
@@ -58,7 +59,7 @@ export default function SettingsPage() {
 
   if (!user) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]" role="status" aria-live="polite">
+      <div className="flex items-center justify-center min-h-100" role="status" aria-live="polite">
         <div className="flex flex-col items-center gap-3">
           <div className="h-8 w-8 border-2 border-primary border-t-transparent rounded-full animate-spin" aria-hidden="true" />
           <p className="text-sm font-semibold text-slate-400">Loading session…</p>
@@ -239,8 +240,10 @@ export default function SettingsPage() {
             >
               <BackupSettings
                 backups={backups}
+                settings={settings}
                 onCreateBackup={createBackup}
                 onRestoreBackup={restoreBackup}
+                onSaveConfig={saveBackupSettings}
                 isLoading={isLoading}
               />
             </div>

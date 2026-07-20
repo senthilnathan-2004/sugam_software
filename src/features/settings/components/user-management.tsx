@@ -48,8 +48,8 @@ export function UserManagement() {
     setIsLoading(true);
     if (typeof window !== 'undefined' && window.electronAPI) {
       try {
-        const list = await window.electronAPI.invoke('settings:get-users');
-        if (list) setUsersList(list);
+        const res = await window.electronAPI.invoke('settings:get-users');
+        if (res?.success && Array.isArray(res.data)) setUsersList(res.data);
       } catch {
         // Fallback demo users
         setUsersList([

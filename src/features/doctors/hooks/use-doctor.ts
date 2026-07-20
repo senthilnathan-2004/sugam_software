@@ -24,7 +24,7 @@ const DEMO_DOCTORS: Doctor[] = [
 ];
 
 export function useDoctor() {
-  const [doctors, setDoctors] = useState<Doctor[]>(DEMO_DOCTORS);
+  const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -35,9 +35,13 @@ export function useDoctor() {
         const res = await window.electronAPI.invoke('doctor:list');
         if (res?.success) {
           setDoctors(res.data);
+        } else {
+          toast.error(res?.error ?? 'Failed to load doctors.');
+          setDoctors([]);
         }
       } catch {
-        setDoctors(DEMO_DOCTORS);
+        toast.error('Failed to load doctors.');
+        setDoctors([]);
       }
     } else {
       setDoctors(DEMO_DOCTORS);
@@ -53,10 +57,16 @@ export function useDoctor() {
         if (res?.success) {
           setQueue(res.data);
         } else {
-          setQueue(DEMO_QUEUE);
+          // Real backend error — surface it and show an EMPTY queue. Never fall
+          // back to demo patients here: injecting fake people into a live
+          // consultation queue would have a clinician act on non-existent
+          // patients.
+          toast.error(res?.error ?? 'Failed to load patient queue.');
+          setQueue([]);
         }
       } catch {
-        setQueue(DEMO_QUEUE);
+        toast.error('Failed to load patient queue.');
+        setQueue([]);
       }
     } else {
       setQueue(DEMO_QUEUE);
@@ -78,6 +88,7 @@ export function useDoctor() {
           return false;
         }
       } catch {
+        toast.error('Failed to save consultation details.');
         return false;
       } finally {
         setIsLoading(false);
@@ -126,6 +137,9 @@ export function useDoctor() {
       } catch (err) {
         console.error(err);
       }
+      // Packaged app: on failure return null rather than a fabricated doctor.
+      setIsLoading(false);
+      return null;
     }
     setIsLoading(false);
     return DEMO_DOCTORS.find((d) => d.id === doctorId) ?? null;

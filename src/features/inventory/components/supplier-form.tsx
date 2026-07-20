@@ -41,8 +41,8 @@ export function SupplierForm({ onSubmit, isLoading, initialData }: SupplierFormP
 
         {/* Email Address */}
         <div className="space-y-1.5">
-          <Label htmlFor="sup-email" className="text-xs font-bold text-slate-700 uppercase tracking-wider">Email Address</Label>
-          <Input id="sup-email" type="email" placeholder="sales@apollo.com" {...register('email', { required: true })} className="h-11 rounded-xl" />
+          <Label htmlFor="sup-email" className="text-xs font-bold text-slate-700 uppercase tracking-wider">Email Address <span className="text-slate-400 normal-case font-medium">(Optional)</span></Label>
+          <Input id="sup-email" type="email" placeholder="sales@apollo.com" {...register('email')} className="h-11 rounded-xl" />
         </div>
 
         {/* GST No */}

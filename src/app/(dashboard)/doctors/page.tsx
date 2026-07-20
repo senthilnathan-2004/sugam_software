@@ -58,7 +58,7 @@ export default function DoctorsPage() {
               size="sm"
               variant="outline"
               className="text-xs font-bold gap-1 h-8 border-slate-200"
-              onClick={() => router.push(`/doctors/detail/${doc.id}`)}
+              onClick={() => router.push(`/doctors/detail?id=${doc.id}`)}
             >
               <Eye className="h-3.5 w-3.5" /> Details
             </Button>
@@ -66,7 +66,7 @@ export default function DoctorsPage() {
               <Button
                 size="sm"
                 className="text-xs font-bold gap-1 h-8 bg-primary/10 text-primary hover:bg-primary/20 border-0"
-                onClick={() => router.push(`/doctors/${doc.id}`)}
+                onClick={() => router.push(`/doctors/workspace?id=${doc.id}`)}
               >
                 Workspace
               </Button>

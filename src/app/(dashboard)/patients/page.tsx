@@ -9,6 +9,7 @@ import { usePatients } from '@/features/patients/hooks/use-patients';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { ConfirmDialog } from '@/components/common/confirm-dialog';
 
 import { useAuthStore } from '@/store/auth.store';
 
@@ -21,6 +22,7 @@ export default function PatientsPage() {
   const [search, setSearch] = useState('');
   const [gender, setGender] = useState('ALL');
   const [bloodGroup, setBloodGroup] = useState('ALL');
+  const [deleteId, setDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchPatients({ search, gender, bloodGroup });
@@ -106,12 +108,20 @@ export default function PatientsPage() {
       <PatientTable
         data={patients}
         isLoading={isLoading}
-        onDelete={(id) => {
-          if (confirm('Are you sure you want to delete this patient record?')) {
-            startTransition(async () => {
-              await deletePatient(id);
-            });
-          }
+        onDelete={(id) => setDeleteId(id)}
+      />
+
+      <ConfirmDialog
+        open={!!deleteId}
+        onOpenChange={(open) => !open && setDeleteId(null)}
+        title="Delete Patient Record"
+        description="This will permanently remove the patient record. This action cannot be undone."
+        confirmText="Delete"
+        variant="danger"
+        onConfirm={() => {
+          const id = deleteId;
+          setDeleteId(null);
+          if (id) startTransition(async () => { await deletePatient(id); });
         }}
       />
     </div>

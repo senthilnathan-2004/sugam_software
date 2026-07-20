@@ -4,7 +4,11 @@ datasource db {
 }
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // Windows-only x64 deployment. "native" covers the build machine; "windows"
+  // pins the query engine explicitly so a build on any host still emits
+  // query_engine-windows.dll.node. Never rely on the default alone.
+  binaryTargets = ["native", "windows"]
 }
 
 // User & RBAC
@@ -20,6 +24,8 @@ model User {
   updatedAt    DateTime   @updatedAt
   auditLogs    AuditLog[]
   doctor       Doctor?
+
+  @@index([role])
 }
 
 model AuditLog {
@@ -31,6 +37,9 @@ model AuditLog {
   entityId  String?
   metadata  String?  // JSON string
   timestamp DateTime @default(now())
+
+  @@index([userId])
+  @@index([timestamp])
 }
 
 model AppSetting {
@@ -83,6 +92,8 @@ model Patient {
   appointments         Appointment[]
   prescriptions        Prescription[]
   invoices             Invoice[]
+
+  @@index([isDeleted, createdAt])
 }
 
 model PatientVisit {
@@ -95,6 +106,8 @@ model PatientVisit {
   diagnosis      String
   notes          String
   nextVisitDate  DateTime?
+
+  @@index([patientId])
 }
 
 model PatientDocument {
@@ -105,6 +118,8 @@ model PatientDocument {
   filePath   String
   fileName   String
   uploadedAt DateTime @default(now())
+
+  @@index([patientId])
 }
 
 // Doctors
@@ -132,6 +147,10 @@ model Appointment {
   status       String        // PENDING, CONFIRMED, CANCELLED, COMPLETED
   type         String        // FIRST_VISIT, FOLLOW_UP, EMERGENCY
   consultation Consultation?
+
+  @@index([patientId])
+  @@index([doctorId])
+  @@index([date, status])
 }
 
 model Consultation {
@@ -146,6 +165,8 @@ model Consultation {
   nextVisit      DateTime?
   prescription   Prescription?
   labRequest     LabRequest?
+
+  @@index([doctorId])
 }
 
 model Prescription {
@@ -159,6 +180,9 @@ model Prescription {
   medicines      String        // JSON string of medicines list with dosage instructions
   instructions   String?
   createdAt      DateTime      @default(now())
+
+  @@index([patientId])
+  @@index([doctorId])
 }
 
 model LabRequest {
@@ -205,9 +229,18 @@ model Medicine {
   sellingPrice Float
   gstPercent   Float
   unit         String            // TABLET, STRIP, BOTTLE, BOX
+  // Base-unit packaging multiplier: how many sellable base units (tablets) one
+  // pack/strip contains. Stock (MedicineBatch.quantity) and billing quantities
+  // are ALWAYS counted in base units; mrp/sellingPrice stay PER PACK and the
+  // per-unit rate is derived as sellingPrice / unitsPerPack. 1 = sold whole.
+  unitsPerPack Int               @default(1)
   reorderLevel Int
   isActive     Boolean           @default(true)
   batches      MedicineBatch[]
+
+  @@index([categoryId])
+  @@index([supplierId])
+  @@index([isActive])
 }
 
 model MedicineBatch {
@@ -223,6 +256,8 @@ model MedicineBatch {
   supplier      Supplier  @relation(fields: [supplierId], references: [id])
 
   @@unique([medicineId, batchNo])
+  @@index([expiryDate])
+  @@index([supplierId])
 }
 
 model PurchaseOrder {
@@ -236,6 +271,9 @@ model PurchaseOrder {
   gstAmount  Float
   total      Float
   status     String   // RECEIVED, CANCELLED
+
+  @@index([supplierId])
+  @@index([date])
 }
 
 // Billing
@@ -259,6 +297,10 @@ model Invoice {
   isReturn      Boolean        @default(false)
   payments      Payment[]
   returns       InvoiceReturn?
+
+  @@index([patientId])
+  @@index([date])
+  @@index([paymentStatus])
 }
 
 model Payment {
@@ -269,6 +311,9 @@ model Payment {
   amount    Float
   reference String?
   paidAt    DateTime @default(now())
+
+  @@index([invoiceId])
+  @@index([paidAt])
 }
 
 model InvoiceReturn {

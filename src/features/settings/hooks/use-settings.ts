@@ -51,6 +51,13 @@ export function useSettings() {
     setBackups(data);
   }, []);
 
+  // In the packaged app window.electronAPI always exists and IPC handlers return
+  // {success,error} envelopes (never throw). A failed mutation MUST surface the
+  // real error and return false — never a fake "Demo Mode" success that shows
+  // the user new values which were never persisted. The demo-mode branch fires
+  // ONLY in a browser dev context where there is no electronAPI. Every function
+  // uses try/finally so isLoading is always cleared (otherwise the shared flag
+  // sticks true and disables every settings button until the page remounts).
   const updateSettings = async (newSettings: Record<string, string>) => {
     setIsLoading(true);
     if (typeof window !== 'undefined' && window.electronAPI) {
@@ -61,10 +68,46 @@ export function useSettings() {
           fetchSettings();
           return true;
         }
-      } catch {}
+        toast.error(res?.error ?? 'Failed to update settings.');
+        return false;
+      } catch {
+        toast.error('Failed to update settings.');
+        return false;
+      } finally {
+        setIsLoading(false);
+      }
     }
     toast.success('Settings updated (Demo Mode)');
     setSettings((prev) => ({ ...prev, ...newSettings }));
+    setIsLoading(false);
+    return true;
+  };
+
+  // Persist auto-backup config, then tell the main process to rebuild the cron
+  // schedule so a changed frequency / toggle / retention applies immediately.
+  const saveBackupSettings = async (config: Record<string, string>) => {
+    setIsLoading(true);
+    if (typeof window !== 'undefined' && window.electronAPI) {
+      try {
+        const res = await window.electronAPI.invoke('settings:update-multiple', config);
+        if (res?.success) {
+          await window.electronAPI.invoke('backup:reschedule');
+          toast.success('Auto-backup settings saved.');
+          fetchSettings();
+          fetchBackups();
+          return true;
+        }
+        toast.error(res?.error ?? 'Failed to save auto-backup settings.');
+        return false;
+      } catch {
+        toast.error('Failed to save auto-backup settings.');
+        return false;
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    toast.success('Auto-backup settings saved (Demo Mode)');
+    setSettings((prev) => ({ ...prev, ...config }));
     setIsLoading(false);
     return true;
   };
@@ -81,11 +124,15 @@ export function useSettings() {
         if (res?.success) {
           toast.success('Password changed successfully!');
           return true;
-        } else {
-          toast.error(res?.error ?? 'Failed to change password.');
-          return false;
         }
-      } catch {}
+        toast.error(res?.error ?? 'Failed to change password.');
+        return false;
+      } catch {
+        toast.error('Failed to change password.');
+        return false;
+      } finally {
+        setIsLoading(false);
+      }
     }
     toast.success('Password changed successfully (Demo Mode)');
     setIsLoading(false);
@@ -101,11 +148,15 @@ export function useSettings() {
           toast.success('Database backup created successfully!');
           fetchBackups();
           return true;
-        } else {
-          toast.error(res?.error ?? 'Backup process failed.');
-          return false;
         }
-      } catch {}
+        toast.error(res?.error ?? 'Backup process failed.');
+        return false;
+      } catch {
+        toast.error('Backup process failed.');
+        return false;
+      } finally {
+        setIsLoading(false);
+      }
     }
     toast.success('Database backup logged (Demo Mode)');
     setIsLoading(false);
@@ -120,11 +171,15 @@ export function useSettings() {
         if (res?.success) {
           toast.success('Database restored successfully! Please restart the application.');
           return true;
-        } else {
-          toast.error(res?.error ?? 'Restore process failed.');
-          return false;
         }
-      } catch {}
+        toast.error(res?.error ?? 'Restore process failed.');
+        return false;
+      } catch {
+        toast.error('Restore process failed.');
+        return false;
+      } finally {
+        setIsLoading(false);
+      }
     }
     toast.success('Database restored (Demo Mode)');
     setIsLoading(false);
@@ -138,6 +193,7 @@ export function useSettings() {
     fetchSettings,
     fetchBackups,
     updateSettings,
+    saveBackupSettings,
     changePassword,
     createBackup,
     restoreBackup,

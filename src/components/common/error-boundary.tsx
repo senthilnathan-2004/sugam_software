@@ -29,7 +29,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   public render() {
     if (this.state.hasError) {
       return (
-        <div className="flex items-center justify-center min-h-[400px] p-6">
+        <div className="flex items-center justify-center min-h-100 p-6">
           <Card className="max-w-md p-6 bg-white border border-slate-100 shadow-xl rounded-hms text-center space-y-4">
             <div className="flex justify-center">
               <div className="p-3 bg-rose-50 rounded-full">

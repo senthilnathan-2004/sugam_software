@@ -31,14 +31,20 @@ export function PurchaseForm({ suppliers, medicines, onSubmit, isLoading, initia
     name: 'items',
   });
 
+  const watchItems = watch('items');
+
   const handleSave = async (values: any) => {
-    // Basic aggregation
+    // Basic aggregation. Quantity is entered in PACKS (strips) and cost is per
+    // pack; stock (MedicineBatch.quantity) is stored in base units (tablets),
+    // so each line converts packs × unitsPerPack before hitting the server.
     let subtotal = 0;
     const items = values.items.map((i: any) => {
-      const qty = parseInt(i.quantity) || 0;
+      const packs = parseInt(i.quantity) || 0;
       const price = parseFloat(i.purchasePrice) || 0;
-      subtotal += qty * price;
-      return i;
+      subtotal += packs * price;
+      const med = medicines.find((m) => m.id === i.medicineId);
+      const perPack = Math.max(1, med?.unitsPerPack || 1);
+      return { ...i, quantity: packs * perPack, packs, unitsPerPack: perPack };
     });
 
     const gstAmount = subtotal * 0.12; // Flat 12% GST simulation
@@ -134,15 +140,23 @@ export function PurchaseForm({ suppliers, medicines, onSubmit, isLoading, initia
                   <Input type="date" {...register(`items.${index}.expiryDate`, { required: true })} className="h-10 rounded-lg text-xs bg-white" />
                 </div>
 
-                {/* Quantity */}
+                {/* Quantity (packs) */}
                 <div className="space-y-1">
-                  <Label className="text-[10px] uppercase font-bold text-slate-500">Qty</Label>
+                  <Label className="text-[10px] uppercase font-bold text-slate-500">Qty (Packs/Strips)</Label>
                   <Input type="number" {...register(`items.${index}.quantity`, { required: true })} className="h-10 rounded-lg text-xs bg-white" />
+                  {(() => {
+                    const med = medicines.find((m) => m.id === watchItems?.[index]?.medicineId);
+                    const perPack = Math.max(1, med?.unitsPerPack || 1);
+                    const packs = parseInt(String(watchItems?.[index]?.quantity)) || 0;
+                    return perPack > 1 && packs > 0 ? (
+                      <p className="text-[10px] text-emerald-600 font-bold">= {packs * perPack} tablets ({packs} × {perPack})</p>
+                    ) : null;
+                  })()}
                 </div>
 
                 {/* Purchase Price */}
                 <div className="space-y-1">
-                  <Label className="text-[10px] uppercase font-bold text-slate-500">Cost (₹)</Label>
+                  <Label className="text-[10px] uppercase font-bold text-slate-500">Cost / Pack (₹)</Label>
                   <Input placeholder="0" {...register(`items.${index}.purchasePrice`, { required: true })} className="h-10 rounded-lg text-xs bg-white" />
                 </div>
               </div>

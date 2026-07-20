@@ -19,6 +19,14 @@ interface InvoiceFormProps {
   onOpenCheckout: (payload: { items: any[]; subtotal: number; gstAmount: number; discount: number; total: number }) => void;
 }
 
+// Selling price is stored PER PACK (strip); billing quantity counts single
+// units (tablets), so every line uses the derived per-unit rate. The server
+// recomputes this authoritatively on checkout — this is display-side only.
+const perUnitPrice = (m: Medicine) => {
+  const pack = Math.max(1, m.unitsPerPack || 1);
+  return Math.round((m.sellingPrice / pack + Number.EPSILON) * 100) / 100;
+};
+
 export function InvoiceForm({ medicines, prescribedMedicines, consultationDetails, onOpenCheckout }: InvoiceFormProps) {
   const [openDropdowns, setOpenDropdowns] = useState<Record<number, boolean>>({});
   
@@ -52,14 +60,15 @@ export function InvoiceForm({ medicines, prescribedMedicines, consultationDetail
         );
 
         if (match) {
+          const unitRate = perUnitPrice(match);
           return {
             medicineId: match.id,
             batchNo: 'B-MAIN',
             quantity: 1, // Default to 1, biller can adjust
-            price: match.sellingPrice,
+            price: unitRate,
             mrp: match.mrp,
             gstPercent: match.gstPercent,
-            total: match.sellingPrice,
+            total: unitRate,
           };
         }
         
@@ -105,11 +114,12 @@ export function InvoiceForm({ medicines, prescribedMedicines, consultationDetail
   const handleDrugSelect = (index: number, medId: string) => {
     const med = medicines.find((m) => m.id === medId);
     if (med) {
+      const unitRate = perUnitPrice(med);
       setValue(`items.${index}.medicineId`, medId);
-      setValue(`items.${index}.price`, med.sellingPrice);
+      setValue(`items.${index}.price`, unitRate);
       setValue(`items.${index}.mrp`, med.mrp);
       setValue(`items.${index}.gstPercent`, med.gstPercent);
-      setValue(`items.${index}.total`, med.sellingPrice * watchItems[index].quantity);
+      setValue(`items.${index}.total`, unitRate * watchItems[index].quantity);
     }
   };
 
@@ -140,20 +150,21 @@ export function InvoiceForm({ medicines, prescribedMedicines, consultationDetail
 
       const med = medicines.find(m => m.barcode === code);
       if (med) {
+        const unitRate = perUnitPrice(med);
         // Check if already in cart
         const currentItems = getValues('items');
         const existingIdx = currentItems.findIndex(i => i.medicineId === med.id);
-        
+
         if (existingIdx >= 0) {
           const newQty = (currentItems[existingIdx].quantity || 0) + 1;
           setValue(`items.${existingIdx}.quantity`, newQty);
-          setValue(`items.${existingIdx}.total`, newQty * med.sellingPrice);
+          setValue(`items.${existingIdx}.total`, newQty * unitRate);
         } else {
           // If the first row is empty, use it. Otherwise append.
           if (currentItems.length === 1 && !currentItems[0].medicineId) {
-             setValue('items.0', { medicineId: med.id, batchNo: 'B-MAIN', quantity: 1, price: med.sellingPrice, mrp: med.mrp, gstPercent: med.gstPercent, total: med.sellingPrice });
+             setValue('items.0', { medicineId: med.id, batchNo: 'B-MAIN', quantity: 1, price: unitRate, mrp: med.mrp, gstPercent: med.gstPercent, total: unitRate });
           } else {
-             append({ medicineId: med.id, batchNo: 'B-MAIN', quantity: 1, price: med.sellingPrice, mrp: med.mrp, gstPercent: med.gstPercent, total: med.sellingPrice });
+             append({ medicineId: med.id, batchNo: 'B-MAIN', quantity: 1, price: unitRate, mrp: med.mrp, gstPercent: med.gstPercent, total: unitRate });
           }
         }
       } else {
@@ -239,7 +250,7 @@ export function InvoiceForm({ medicines, prescribedMedicines, consultationDetail
         <div className="space-y-4">
           {fields.map((field, index) => (
             <div key={field.id} className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
-              <div className="sm:col-span-4 space-y-1">
+              <div className="sm:col-span-5 space-y-1">
                 {index === 0 && <Label className="text-[10px] uppercase font-bold text-slate-500">Choose Medicine</Label>}
                 <Popover open={openDropdowns[index] || false} onOpenChange={(val) => setOpenDropdowns((prev) => ({ ...prev, [index]: val }))}>
                   <PopoverTrigger asChild>
@@ -297,20 +308,14 @@ export function InvoiceForm({ medicines, prescribedMedicines, consultationDetail
 
               {/* Price */}
               <div className="sm:col-span-2 space-y-1">
-                {index === 0 && <Label className="text-[10px] uppercase font-bold text-slate-500">Price (₹)</Label>}
+                {index === 0 && <Label className="text-[10px] uppercase font-bold text-slate-500">Price / Unit (₹)</Label>}
                 <Input type="number" step="any" {...register(`items.${index}.price`)} className="h-10 rounded-lg text-xs" />
               </div>
 
               {/* Quantity */}
               <div className="sm:col-span-1 space-y-1">
-                {index === 0 && <Label className="text-[10px] uppercase font-bold text-slate-500">Qty</Label>}
+                {index === 0 && <Label className="text-[10px] uppercase font-bold text-slate-500">Qty (Tablets/Units)</Label>}
                 <Input type="number" {...register(`items.${index}.quantity`)} className="h-10 rounded-lg text-xs" />
-              </div>
-
-              {/* GST Percent */}
-              <div className="sm:col-span-1 space-y-1">
-                {index === 0 && <Label className="text-[10px] uppercase font-bold text-slate-500">GST %</Label>}
-                <Input type="number" {...register(`items.${index}.gstPercent`)} className="h-10 rounded-lg text-xs" />
               </div>
 
               {/* Line total */}

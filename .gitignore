@@ -9,3 +9,12 @@ prisma/dev.db
 *.exe
 *.AppImage
 *.tsbuildinfo
+# Local database backups (may contain PHI) — never commit
+backups/
+*.db
+*.db-wal
+*.db-shm
+
+# Build output (also keeps Tailwind v4 oxide from scanning binary app.asar blobs)
+release*/
+out/

@@ -16,6 +16,10 @@ async function main() {
     { key: 'gst_slab_1', value: '5', type: 'NUMBER' },
     { key: 'gst_slab_2', value: '12', type: 'NUMBER' },
     { key: 'gst_slab_3', value: '18', type: 'NUMBER' },
+    { key: 'backup_enabled', value: 'true', type: 'STRING' },
+    { key: 'backup_frequency', value: 'DAILY', type: 'STRING' },
+    { key: 'backup_retention', value: '10', type: 'NUMBER' },
+    { key: 'backup_dir', value: '', type: 'STRING' },
   ];
 
   for (const s of settings) {
@@ -26,11 +30,15 @@ async function main() {
     });
   }
 
-  // Seed Admin User — password: Admin@123
+  // Seed Admin User — password: Admin@123 (FIRST-INSTALL default only).
+  // NOTE: update:{} — re-running the seed (e.g. on upgrade) must NOT reset an
+  // existing account's password back to this printed default. Passwords set by
+  // the admin are preserved. These defaults are for initial login only and
+  // should be changed on first sign-in.
   const adminHash = await bcrypt.hash('Admin@123', 12);
   await seedPrisma.user.upsert({
     where: { email: 'admin@sugamhms.com' },
-    update: { passwordHash: adminHash },
+    update: {},
     create: {
       name: 'HMS Admin',
       email: 'admin@sugamhms.com',
@@ -42,9 +50,9 @@ async function main() {
 
   // Seed Doctor User — password: Doctor@123
   const doctorHash = await bcrypt.hash('Doctor@123', 12);
-  await seedPrisma.user.upsert({
+  const docUser = await seedPrisma.user.upsert({
     where: { email: 'doctor@sugamhms.com' },
-    update: { passwordHash: doctorHash },
+    update: {},
     create: {
       name: 'Dr. Anjali Verma',
       email: 'doctor@sugamhms.com',
@@ -58,7 +66,7 @@ async function main() {
   const billingHash = await bcrypt.hash('Billing@123', 12);
   await seedPrisma.user.upsert({
     where: { email: 'billing@sugamhms.com' },
-    update: { passwordHash: billingHash },
+    update: {},
     create: {
       name: 'Rahul Sharma',
       email: 'billing@sugamhms.com',
@@ -72,13 +80,29 @@ async function main() {
   const receptionHash = await bcrypt.hash('Reception@123', 12);
   await seedPrisma.user.upsert({
     where: { email: 'reception@sugamhms.com' },
-    update: { passwordHash: receptionHash },
+    update: {},
     create: {
       name: 'Priya Patel',
       email: 'reception@sugamhms.com',
       passwordHash: receptionHash,
       role: 'RECEPTION',
       isActive: true,
+    },
+  });
+
+  // Seed the associated Doctor profile so the doctor appears in the directory,
+  // reception's doctor dropdown, and can take appointments. Without this a fresh
+  // `prisma db seed` (which runs THIS file) leaves doctor:list empty and the
+  // doctor dashboard / reception routing dead. Mirrors prisma/seed.js.
+  await seedPrisma.doctor.upsert({
+    where: { userId: docUser.id },
+    update: {},
+    create: {
+      userId: docUser.id,
+      specialization: 'General Physician',
+      license: 'REG-1001',
+      qualification: 'MBBS, MD',
+      schedule: '{}',
     },
   });
 

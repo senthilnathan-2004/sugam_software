@@ -57,10 +57,14 @@ export function usePatients() {
         if (res?.success) {
           setPatients(res.data);
         } else {
+          // Surface the real error and show an empty list — never fake patient
+          // records in the packaged app.
           toast.error(res?.error ?? 'Failed to load patients.');
+          setPatients([]);
         }
       } catch {
-        setPatients(DEMO_PATIENTS);
+        toast.error('Failed to load patients.');
+        setPatients([]);
       }
     } else {
       setPatients(DEMO_PATIENTS);
@@ -80,26 +84,9 @@ export function usePatients() {
           router.push('/patients');
         }
       } catch {
-        const demoDetail = DEMO_PATIENTS.find((p) => p.id === id);
-        if (demoDetail) {
-          setCurrentPatient({
-            ...demoDetail,
-            visits: [
-              {
-                id: '101',
-                patientId: id,
-                doctorId: 'doc1',
-                doctorName: 'Dr. Anjali Verma',
-                date: new Date(),
-                chiefComplaint: 'Acute headache and slight fever',
-                diagnosis: 'Mild Migraine',
-                notes: 'Advised rest and plenty of fluids.',
-                nextVisitDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-              },
-            ],
-            documents: [],
-          });
-        }
+        // Never fabricate a patient record + medical history on error.
+        toast.error('Failed to get patient details.');
+        router.push('/patients');
       }
     } else {
       const demoDetail = DEMO_PATIENTS.find((p) => p.id === id);
@@ -156,6 +143,7 @@ export function usePatients() {
           return false;
         }
       } catch {
+        toast.error('Failed to delete patient.');
         return false;
       }
     }

@@ -1,37 +1,65 @@
 {
-  "appId": "com.sugamhms.app",
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "com.sugamhms.desktop",
   "productName": "Sugam HMS",
+  "copyright": "Copyright © 2026 Sugam HMS Team",
   "directories": {
-    "output": "dist"
+    "output": "release",
+    "buildResources": "build"
   },
   "protocols": {
     "name": "Sugam HMS URL",
-    "schemes": [
-      "sugamhms"
-    ]
+    "schemes": ["sugamhms"]
   },
+  "asar": true,
   "files": [
+    "electron/dist/**/*",
     "out/**/*",
-    "electron/**/*",
+    "package.json",
     "node_modules/**/*",
-    "prisma/dev.db",
-    "package.json"
+    "!node_modules/.bin",
+    "!**/node_modules/**/{test,tests,__tests__,example,examples,.github}/**",
+    "!**/*.{md,markdown,map}",
+    "!**/{.eslintrc,.prettierrc,tsconfig.json,.editorconfig}",
+    "node_modules/@prisma/client/**/*",
+    "node_modules/@prisma/engines/**/*",
+    { "from": "node_modules/.prisma", "to": "node_modules/.prisma" }
   ],
+  "asarUnpack": [
+    "**/*.node",
+    "**/node_modules/.prisma/**/*",
+    "**/node_modules/@prisma/engines/**/*",
+    "**/node_modules/@prisma/client/**/*"
+  ],
+  "extraResources": [
+    { "from": "prisma/dist.db", "to": "prisma/dev.db" },
+    { "from": "prisma/schema.prisma", "to": "prisma/schema.prisma" },
+    { "from": "prisma/migrations", "to": "prisma/migrations" },
+    { "from": "public/icon.ico", "to": "icon.ico" }
+  ],
+  "afterPack": "build/afterPack.js",
   "win": {
-    "target": "nsis",
-    "icon": "resources/icon.ico"
+    "target": [{ "target": "nsis", "arch": ["x64"] }],
+    "icon": "public/icon.ico",
+    "artifactName": "Sugam-HMS-Setup-${version}.${ext}",
+    "signAndEditExecutable": true,
+    "legalTrademarks": "Sugam HMS"
   },
   "nsis": {
     "oneClick": false,
+    "perMachine": false,
+    "allowElevation": true,
     "allowToChangeInstallationDirectory": true,
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
-    "shortcutName": "Sugam HMS"
+    "shortcutName": "Sugam HMS",
+    "runAfterFinish": true,
+    "deleteAppDataOnUninstall": false,
+    "uninstallDisplayName": "Sugam HMS ${version}",
+    "installerIcon": "public/icon.ico",
+    "uninstallerIcon": "public/icon.ico",
+    "installerHeaderIcon": "public/icon.ico"
   },
-  "extraResources": [
-    {
-      "from": "prisma/dev.db",
-      "to": "prisma/dev.db"
-    }
-  ]
+  "compression": "maximum",
+  "publish": null
 }

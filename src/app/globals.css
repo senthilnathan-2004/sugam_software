@@ -119,6 +119,12 @@
 }
 
 @layer base {
+  /* Global type scale-up: 16px → 18px base. All rem-based Tailwind text
+     utilities (text-xs/sm/base/lg…) scale ~12.5% larger app-wide from this
+     single point — no per-section edits needed. */
+  html {
+    font-size: 112.5%;
+  }
   * {
     @apply border-border;
   }

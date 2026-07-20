@@ -14,7 +14,7 @@ interface SystemSettingsProps {
 }
 
 export function SystemSettings({ initialValues, onSubmit, isLoading }: SystemSettingsProps) {
-  const { register, handleSubmit } = useForm({
+  const { register, handleSubmit, reset } = useForm({
     defaultValues: {
       hospital_name: initialValues.hospital_name || '',
       hospital_phone: initialValues.hospital_phone || '',
@@ -22,6 +22,20 @@ export function SystemSettings({ initialValues, onSubmit, isLoading }: SystemSet
       gst_number: initialValues.gst_number || '',
     },
   });
+
+  // react-hook-form captures defaultValues once at mount — when the parent's
+  // settings state is still the hardcoded demo constant (the async fetch has
+  // not resolved yet). Without this reset the form permanently shows demo
+  // hospital name/phone/address/GSTIN, and saving overwrites the real persisted
+  // values. Re-sync whenever the fetched settings arrive/change.
+  React.useEffect(() => {
+    reset({
+      hospital_name: initialValues.hospital_name || '',
+      hospital_phone: initialValues.hospital_phone || '',
+      hospital_address: initialValues.hospital_address || '',
+      gst_number: initialValues.gst_number || '',
+    });
+  }, [initialValues, reset]);
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-5 bg-white p-6 rounded-hms border border-slate-100 shadow-md">

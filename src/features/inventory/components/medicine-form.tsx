@@ -27,8 +27,9 @@ export function MedicineForm({ categories, suppliers, onSubmit, isLoading, initi
       barcode: '',
       mrp: '',
       sellingPrice: '',
-      gstPercent: '12',
+      gstPercent: '0',
       unit: 'STRIP',
+      unitsPerPack: '1',
       reorderLevel: '10',
     },
   });
@@ -85,6 +86,22 @@ export function MedicineForm({ categories, suppliers, onSubmit, isLoading, initi
           </Select>
         </div>
 
+        {/* Units per Pack */}
+        <div className="space-y-1.5">
+          <Label htmlFor="unitsPerPack" className="text-xs font-bold text-slate-700 uppercase tracking-wider">Units Per Pack / Strip</Label>
+          <Input
+            id="unitsPerPack"
+            type="number"
+            min={1}
+            placeholder="e.g. 15 tablets per strip"
+            {...register('unitsPerPack', { required: true, min: 1 })}
+            className="h-11 rounded-xl"
+          />
+          <p className="text-[10px] text-slate-400 font-medium">
+            Tablets in one strip. Stock and billing count single tablets; selling price below is per full strip. Use 1 for items sold whole (bottle, box).
+          </p>
+        </div>
+
         {/* Barcode */}
         <div className="space-y-1.5">
           <Label htmlFor="barcode" className="text-xs font-bold text-slate-700 uppercase tracking-wider">Barcode / EAN</Label>
@@ -108,13 +125,16 @@ export function MedicineForm({ categories, suppliers, onSubmit, isLoading, initi
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="sellingPrice" className="text-xs font-bold text-slate-700 uppercase tracking-wider">Selling Price</Label>
+          <Label htmlFor="sellingPrice" className="text-xs font-bold text-slate-700 uppercase tracking-wider">Selling Price (Per Pack/Strip)</Label>
           <Input id="sellingPrice" placeholder="0.00" {...register('sellingPrice', { required: true })} className="h-11 rounded-xl" />
+          <p className="text-[10px] text-slate-400 font-medium">
+            Loose tablets are billed pro-rata: strip price ÷ units per pack.
+          </p>
         </div>
 
         <div className="space-y-1.5">
           <Label htmlFor="gstPercent" className="text-xs font-bold text-slate-700 uppercase tracking-wider">GST Slab (%)</Label>
-          <Select defaultValue="12" onValueChange={(v) => setValue('gstPercent', v)}>
+          <Select defaultValue="0" onValueChange={(v) => setValue('gstPercent', v)}>
             <SelectTrigger className="h-11 rounded-xl">
               <SelectValue placeholder="Select GST Slab" />
             </SelectTrigger>
@@ -128,7 +148,7 @@ export function MedicineForm({ categories, suppliers, onSubmit, isLoading, initi
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="reorderLevel" className="text-xs font-bold text-slate-700 uppercase tracking-wider">Reorder Warning Threshold (Units)</Label>
+          <Label htmlFor="reorderLevel" className="text-xs font-bold text-slate-700 uppercase tracking-wider">Reorder Warning Threshold (Single Units/Tablets)</Label>
           <Input id="reorderLevel" placeholder="10" {...register('reorderLevel', { required: true })} className="h-11 rounded-xl" />
         </div>
       </div>

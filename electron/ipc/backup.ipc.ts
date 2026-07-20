@@ -1,13 +1,16 @@
-import { ipcMain, IpcMainInvokeEvent } from 'electron';
-import { PrismaClient } from '@prisma/client';
+import { IpcMainInvokeEvent } from 'electron';
+import { handle } from './authorize.js';
 import * as fs from 'fs';
 import * as path from 'path';
-
-const prisma = new PrismaClient();
+import { prisma, disconnectPrisma, getDbFilePath } from '../db.js';
+import { writeAudit } from '../audit.js';
+import { runBackup, verifyDatabaseFile } from '../backup-util.js';
+import { initBackupScheduler } from '../cron.js';
+import type { Session } from '../session.js';
 
 export function registerBackupIpc() {
   // ─── List Backups logs ───────────────────────────────────────────────────
-  ipcMain.handle('backup:list', async () => {
+  handle('backup:list', async () => {
     try {
       const logs = await prisma.backup.findMany({
         orderBy: { createdAt: 'desc' },
@@ -19,62 +22,83 @@ export function registerBackupIpc() {
   });
 
   // ─── Trigger Database Backup (.db file copy) ──────────────────────────────
-  ipcMain.handle('backup:create', async (_event: IpcMainInvokeEvent, backupDir: string) => {
+  // Manual, on-demand backup. Shares the WAL-checkpoint + integrity-verify
+  // routine with the auto scheduler via runBackup().
+  handle('backup:create', async (_event: IpcMainInvokeEvent, backupDir: string, session: Session | null) => {
+    const result = await runBackup({ type: 'MANUAL', backupDir });
+    if (!result.ok) {
+      return { success: false, error: result.error ?? 'Database backup process failed.' };
+    }
+    await writeAudit(session, 'CREATE', 'Backup', result.log!.id);
+    return { success: true, data: result.log };
+  });
+
+  // ─── Reschedule Auto-Backup ───────────────────────────────────────────────
+  // Called by the renderer after saving backup settings so a changed frequency
+  // / enabled toggle / retention takes effect immediately (no app restart).
+  handle('backup:reschedule', async () => {
     try {
-      const dbPath = path.join(process.cwd(), 'prisma/dev.db');
-      if (!fs.existsSync(dbPath)) {
-        return { success: false, error: 'Source SQLite database not found.' };
-      }
-
-      // Ensure backup directory exists
-      if (!fs.existsSync(backupDir)) {
-        fs.mkdirSync(backupDir, { recursive: true });
-      }
-
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const backupFileName = `sugam_hms_backup_${timestamp}.db`;
-      const destPath = path.join(backupDir, backupFileName);
-
-      // Copy SQLite file safely
-      fs.copyFileSync(dbPath, destPath);
-
-      // Calculate size
-      const stats = fs.statSync(destPath);
-      const sizeBytes = stats.size;
-
-      // Log in DB table
-      const log = await prisma.backup.create({
-        data: {
-          filePath: destPath,
-          size: sizeBytes,
-          type: 'MANUAL',
-          status: 'SUCCESS',
-        },
-      });
-
-      return { success: true, data: log };
+      await initBackupScheduler();
+      return { success: true };
     } catch (error) {
-      console.error('[backup:create] Error:', error);
-      return { success: false, error: 'Database backup process failed.' };
+      console.error('[backup:reschedule] Error:', error);
+      return { success: false, error: 'Failed to reschedule auto-backup.' };
     }
   });
 
   // ─── Restore Database ─────────────────────────────────────────────────────
-  ipcMain.handle('backup:restore', async (_event: IpcMainInvokeEvent, backupFilePath: string) => {
+  handle('backup:restore', async (_event: IpcMainInvokeEvent, backupFilePath: string, session: Session | null) => {
     try {
-      if (!fs.existsSync(backupFilePath)) {
+      if (!backupFilePath || typeof backupFilePath !== 'string' || !fs.existsSync(backupFilePath)) {
         return { success: false, error: 'Backup file path does not exist.' };
       }
 
-      const dbPath = path.join(process.cwd(), 'prisma/dev.db');
+      const dbPath = getDbFilePath();
+      if (path.resolve(backupFilePath) === dbPath) {
+        return { success: false, error: 'Cannot restore a database over itself.' };
+      }
 
-      // Close Prisma client connection before overwriting SQLite file
-      await prisma.$disconnect();
+      // Refuse to overwrite the live DB with a file that isn't a valid,
+      // uncorrupted SQLite database.
+      const sourceOk = await verifyDatabaseFile(backupFilePath);
+      if (!sourceOk) {
+        return { success: false, error: 'Selected backup failed integrity check; restore aborted.' };
+      }
+
+      // Snapshot the current DB before overwriting so a bad backup file
+      // does not cause irreversible data loss.
+      if (fs.existsSync(dbPath)) {
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        try {
+          fs.copyFileSync(dbPath, `${dbPath}.pre-restore-${stamp}`);
+        } catch (snapErr) {
+          console.error('[backup:restore] Pre-restore snapshot failed:', snapErr);
+          return { success: false, error: 'Could not snapshot current database; restore aborted.' };
+        }
+      }
+
+      // Release the SQLite handle before overwriting the file on disk.
+      await disconnectPrisma();
 
       // Overwrite database file
       fs.copyFileSync(backupFilePath, dbPath);
 
-      return { success: true };
+      // Delete the OLD database's WAL/SHM sidecars. In WAL mode SQLite replays a
+      // leftover `-wal` on next open; without removing them the previous
+      // database's uncheckpointed writes get replayed ON TOP of the freshly
+      // restored file, silently reverting/corrupting the restore.
+      for (const sidecar of [`${dbPath}-wal`, `${dbPath}-shm`]) {
+        try {
+          if (fs.existsSync(sidecar)) fs.unlinkSync(sidecar);
+        } catch (sideErr) {
+          console.error(`[backup:restore] Failed to remove sidecar ${sidecar}:`, sideErr);
+        }
+      }
+
+      // Prisma cannot safely reuse the swapped file mid-session; the app must
+      // restart to reconnect to the restored database.
+      await writeAudit(session, 'RESTORE', 'Backup', null);
+      return { success: true, data: { restartRequired: true } };
     } catch (error) {
       console.error('[backup:restore] Error:', error);
       return { success: false, error: 'Database restore process failed.' };

@@ -1,19 +1,16 @@
-import { ipcMain, IpcMainInvokeEvent, dialog } from 'electron';
-import { PrismaClient } from '@prisma/client';
+import { IpcMainInvokeEvent, dialog } from 'electron';
+import { handle } from './authorize.js';
+import { PatientWriteSchema } from './schemas/patient.js';
 import * as fs from 'fs';
 import * as xlsx from 'xlsx';
-
-const prisma = new PrismaClient();
-
-function calculateAge(dob: Date): number {
-  const diffMs = Date.now() - dob.getTime();
-  const ageDate = new Date(diffMs);
-  return Math.abs(ageDate.getUTCFullYear() - 1970);
-}
+import { prisma } from '../db.js';
+import { writeAudit } from '../audit.js';
+import type { Session } from '../session.js';
+import { calculateAge } from '../age.js';
 
 export function registerPatientIpc() {
   // ─── List Patients with search/filters ────────────────────────────────────
-  ipcMain.handle(
+  handle(
     'patient:list',
     async (
       _event: IpcMainInvokeEvent,
@@ -45,7 +42,11 @@ export function registerPatientIpc() {
           orderBy: { createdAt: 'desc' },
         });
 
-        return { success: true, data: patients };
+        // Compute age from dob on READ so it is never stale — the stored `age`
+        // column drifts as years pass and is only refreshed on write.
+        const withAge = patients.map((p) => ({ ...p, age: calculateAge(p.dob) }));
+
+        return { success: true, data: withAge };
       } catch (error) {
         console.error('[patient:list] Error:', error);
         return { success: false, error: 'Failed to retrieve patients.' };
@@ -54,7 +55,7 @@ export function registerPatientIpc() {
   );
 
   // ─── Get Single Patient Detail ───────────────────────────────────────────
-  ipcMain.handle('patient:get', async (_event: IpcMainInvokeEvent, id: string) => {
+  handle('patient:get', async (_event: IpcMainInvokeEvent, id: string) => {
     try {
       const patient = await prisma.patient.findUnique({
         where: { id },
@@ -86,6 +87,7 @@ export function registerPatientIpc() {
         success: true,
         data: {
           ...patient,
+          age: calculateAge(patient.dob),
           visits: visitsWithDoctorNames,
         },
       };
@@ -96,7 +98,7 @@ export function registerPatientIpc() {
   });
 
   // ─── Upload Patient Document ──────────────────────────────────────────────
-  ipcMain.handle('patient:document:upload', async (_event: IpcMainInvokeEvent, payload: any) => {
+  handle('patient:document:upload', async (_event: IpcMainInvokeEvent, payload: any, session: Session | null) => {
     try {
       const { patientId, type, fileName, buffer } = payload;
       const { app } = require('electron');
@@ -123,6 +125,7 @@ export function registerPatientIpc() {
         }
       });
       
+      await writeAudit(session, 'CREATE', 'PatientDocument', doc.id);
       return { success: true, data: doc };
     } catch (error) {
       console.error('[patient:document:upload] Error:', error);
@@ -131,29 +134,34 @@ export function registerPatientIpc() {
   });
 
   // ─── Create Patient ───────────────────────────────────────────────────────
-  ipcMain.handle('patient:create', async (_event: IpcMainInvokeEvent, data: any) => {
+  handle('patient:create', async (_event: IpcMainInvokeEvent, data: any, session: Session | null) => {
+    const parsed = PatientWriteSchema.safeParse(data);
+    if (!parsed.success) {
+      return { success: false, error: parsed.error.issues[0]?.message ?? 'Invalid patient data.' };
+    }
+    const d = parsed.data;
     try {
       // Generate patientId (P-XXXXX format)
       const count = await prisma.patient.count();
       const patientId = `P-${String(count + 1).padStart(5, '0')}`;
 
-      const dobDate = new Date(data.dob);
+      const dobDate = new Date(d.dob);
       const age = calculateAge(dobDate);
 
       const patient = await prisma.patient.create({
         data: {
           patientId,
-          name: data.name,
+          name: d.name,
           dob: dobDate,
           age,
-          gender: data.gender,
-          bloodGroup: data.bloodGroup,
-          phone: data.phone,
-          email: data.email || null,
-          address: data.address,
-          emergencyContactName: data.emergencyContactName,
-          emergencyContactPhone: data.emergencyContactPhone,
-          photo: data.photo || null,
+          gender: d.gender,
+          bloodGroup: d.bloodGroup,
+          phone: d.phone,
+          email: d.email || null,
+          address: d.address,
+          emergencyContactName: d.emergencyContactName || '',
+          emergencyContactPhone: d.emergencyContactPhone || '',
+          photo: d.photo || null,
         },
       });
 
@@ -170,6 +178,7 @@ export function registerPatientIpc() {
         }
       });
 
+      await writeAudit(session, 'CREATE', 'Patient', patient.id);
       return { success: true, data: patient };
     } catch (error) {
       console.error('[patient:create] Error:', error);
@@ -178,29 +187,38 @@ export function registerPatientIpc() {
   });
 
   // ─── Update Patient ───────────────────────────────────────────────────────
-  ipcMain.handle('patient:update', async (_event: IpcMainInvokeEvent, payload: { id: string; data: any }) => {
+  handle('patient:update', async (_event: IpcMainInvokeEvent, payload: { id: string; data: any }, session: Session | null) => {
+    const id = payload?.id;
+    if (!id || typeof id !== 'string') {
+      return { success: false, error: 'Patient id is required.' };
+    }
+    const parsed = PatientWriteSchema.safeParse(payload?.data);
+    if (!parsed.success) {
+      return { success: false, error: parsed.error.issues[0]?.message ?? 'Invalid patient data.' };
+    }
+    const d = parsed.data;
     try {
-      const { id, data } = payload;
-      const dobDate = new Date(data.dob);
+      const dobDate = new Date(d.dob);
       const age = calculateAge(dobDate);
 
       const patient = await prisma.patient.update({
         where: { id },
         data: {
-          name: data.name,
+          name: d.name,
           dob: dobDate,
           age,
-          gender: data.gender,
-          bloodGroup: data.bloodGroup,
-          phone: data.phone,
-          email: data.email || null,
-          address: data.address,
-          emergencyContactName: data.emergencyContactName,
-          emergencyContactPhone: data.emergencyContactPhone,
-          photo: data.photo || null,
+          gender: d.gender,
+          bloodGroup: d.bloodGroup,
+          phone: d.phone,
+          email: d.email || null,
+          address: d.address,
+          emergencyContactName: d.emergencyContactName || '',
+          emergencyContactPhone: d.emergencyContactPhone || '',
+          photo: d.photo || null,
         },
       });
 
+      await writeAudit(session, 'UPDATE', 'Patient', payload.id);
       return { success: true, data: patient };
     } catch (error) {
       console.error('[patient:update] Error:', error);
@@ -209,12 +227,13 @@ export function registerPatientIpc() {
   });
 
   // ─── Soft Delete Patient ──────────────────────────────────────────────────
-  ipcMain.handle('patient:delete', async (_event: IpcMainInvokeEvent, id: string) => {
+  handle('patient:delete', async (_event: IpcMainInvokeEvent, id: string, session: Session | null) => {
     try {
       await prisma.patient.update({
         where: { id },
         data: { isDeleted: true },
       });
+      await writeAudit(session, 'DELETE', 'Patient', id);
       return { success: true };
     } catch (error) {
       console.error('[patient:delete] Error:', error);
@@ -223,7 +242,7 @@ export function registerPatientIpc() {
   });
 
   // ─── Export Patients to Excel ───────────────────────────────────────────────
-  ipcMain.handle('patient:export', async () => {
+  handle('patient:export', async () => {
     try {
       const patients = await prisma.patient.findMany({
         where: { isDeleted: false },
@@ -234,7 +253,7 @@ export function registerPatientIpc() {
         'Patient ID': p.patientId,
         Name: p.name,
         DOB: new Date(p.dob).toLocaleDateString('en-IN'),
-        Age: p.age,
+        Age: calculateAge(p.dob),
         Gender: p.gender,
         'Blood Group': p.bloodGroup,
         Phone: p.phone,
@@ -269,7 +288,7 @@ export function registerPatientIpc() {
   });
 
   // ─── Import Patients from Excel ─────────────────────────────────────────────
-  ipcMain.handle('patient:import', async () => {
+  handle('patient:import', async (_event, _data, session: Session | null) => {
     try {
       const { filePaths } = await dialog.showOpenDialog({
         title: 'Import Patients',
@@ -349,6 +368,7 @@ export function registerPatientIpc() {
         return { importedCount, skippedCount };
       });
 
+      await writeAudit(session, 'CREATE', 'Patient', null, { imported: results.importedCount });
       return { success: true, data: results };
     } catch (error: any) {
       console.error('[patient:import] Error:', error);

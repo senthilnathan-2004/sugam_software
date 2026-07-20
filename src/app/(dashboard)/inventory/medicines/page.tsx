@@ -78,7 +78,7 @@ export default function MedicinesPage() {
                       <Plus className="h-4 w-4" /> Add Medicine
                     </Button>
                   </DialogTrigger>
-                  <DialogContent className="sm:max-w-4xl bg-white border rounded-2xl shadow-2xl p-6">
+                  <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto bg-white border rounded-2xl shadow-2xl p-6">
                     <DialogHeader>
                       <DialogTitle className="text-sm font-bold text-slate-800 flex items-center gap-2">
                         <Package className="h-5 w-5 text-primary" /> {editingMedicine ? 'Edit Medicine Item' : 'Register New Medicine Item'}

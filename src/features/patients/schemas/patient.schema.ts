@@ -8,8 +8,8 @@ export const patientSchema = z.object({
   phone: z.string().min(10, 'Phone number must be at least 10 digits').max(15),
   email: z.string().email('Invalid email address').or(z.literal('')),
   address: z.string().min(1, 'Address is required').max(300),
-  emergencyContactName: z.string().min(1, 'Emergency contact name is required'),
-  emergencyContactPhone: z.string().min(10, 'Emergency phone must be at least 10 digits').max(15),
+  emergencyContactName: z.string().max(100).optional().or(z.literal('')),
+  emergencyContactPhone: z.string().min(10, 'Emergency phone must be at least 10 digits').max(15).or(z.literal('')).optional(),
   photo: z.string().optional(),
 });
 

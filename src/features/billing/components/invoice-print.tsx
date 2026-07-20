@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/card';
 import { Printer, CheckCircle2, ReceiptText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatCurrency, cn } from '@/lib/utils';
+import { useSettings } from '@/features/settings/hooks/use-settings';
 
 interface InvoicePrintProps {
   invoice: {
@@ -23,6 +24,11 @@ interface InvoicePrintProps {
 
 export function InvoicePrint({ invoice, patient, items }: InvoicePrintProps) {
   const [printFormat, setPrintFormat] = React.useState<'A4' | 'THERMAL'>('A4');
+  const { settings, fetchSettings } = useSettings();
+
+  React.useEffect(() => {
+    fetchSettings();
+  }, [fetchSettings]);
 
   const handlePrint = (format: 'A4' | 'THERMAL') => {
     setPrintFormat(format);
@@ -67,10 +73,14 @@ export function InvoicePrint({ invoice, patient, items }: InvoicePrintProps) {
           <>
             {/* Header Branding A4 */}
         <div className="flex justify-between items-start border-b-2 border-slate-100 pb-4">
-          <div>
-            <h2 className="text-xl font-black text-primary leading-tight font-sans">SUGAM GENERAL HOSPITAL</h2>
-            <p className="text-xs text-slate-400 font-medium">123, Healthcare Avenue, Chennai, TN 600001</p>
-            <p className="text-[10px] text-slate-400 font-bold font-mono">GST No: 33AABCU9603R1ZM</p>
+          <div className="flex items-center gap-3">
+            <img src="/logo.png" alt="Hospital Logo" className="h-14 w-14 object-contain shrink-0" />
+            <div>
+              <h2 className="text-xl font-black text-primary leading-tight font-sans">{settings.hospital_name}</h2>
+              <p className="text-xs text-slate-400 font-medium">{settings.hospital_address}</p>
+              <p className="text-[10px] text-slate-400 font-medium">{settings.hospital_phone}</p>
+              <p className="text-[10px] text-slate-400 font-bold font-mono">GST No: {settings.gst_number}</p>
+            </div>
           </div>
           <div className="text-right">
             <h3 className="text-sm font-black text-slate-900 leading-tight">TAX INVOICE</h3>
@@ -136,10 +146,12 @@ export function InvoicePrint({ invoice, patient, items }: InvoicePrintProps) {
               <span>Subtotal</span>
               <span className="font-mono text-slate-800">{formatCurrency(invoice.subtotal)}</span>
             </div>
-            <div className="flex justify-between">
-              <span>GST Amount</span>
-              <span className="font-mono text-slate-800">{formatCurrency(invoice.gstAmount)}</span>
-            </div>
+            {invoice.gstAmount > 0 && (
+              <div className="flex justify-between">
+                <span>GST Amount</span>
+                <span className="font-mono text-slate-800">{formatCurrency(invoice.gstAmount)}</span>
+              </div>
+            )}
             {invoice.discount > 0 && (
               <div className="flex justify-between text-rose-600">
                 <span>Discount</span>
@@ -163,9 +175,11 @@ export function InvoicePrint({ invoice, patient, items }: InvoicePrintProps) {
           <div className="space-y-4 text-xs font-mono">
             {/* Thermal Header */}
             <div className="text-center pb-3 border-b border-dashed border-slate-300">
-              <h2 className="text-sm font-black uppercase">Sugam General Hospital</h2>
-              <p>123, Healthcare Ave, Chennai</p>
-              <p>GST: 33AABCU9603R1ZM</p>
+              <img src="/logo.png" alt="Hospital Logo" className="h-12 w-12 object-contain mx-auto mb-1" />
+              <h2 className="text-sm font-black uppercase">{settings.hospital_name}</h2>
+              <p>{settings.hospital_address}</p>
+              <p>{settings.hospital_phone}</p>
+              <p>GST: {settings.gst_number}</p>
             </div>
             
             <div className="space-y-1 pb-3 border-b border-dashed border-slate-300">
@@ -196,7 +210,7 @@ export function InvoicePrint({ invoice, patient, items }: InvoicePrintProps) {
 
             <div className="pt-2 border-t border-dashed border-slate-300 space-y-1">
               <div className="flex justify-between"><span>Subtotal:</span> <span>{formatCurrency(invoice.subtotal)}</span></div>
-              <div className="flex justify-between"><span>Tax (GST):</span> <span>{formatCurrency(invoice.gstAmount)}</span></div>
+              {invoice.gstAmount > 0 && <div className="flex justify-between"><span>Tax (GST):</span> <span>{formatCurrency(invoice.gstAmount)}</span></div>}
               {invoice.discount > 0 && <div className="flex justify-between"><span>Discount:</span> <span>-{formatCurrency(invoice.discount)}</span></div>}
               <div className="flex justify-between font-bold text-sm pt-1 border-t border-dashed border-slate-300">
                 <span>Total:</span> <span>{formatCurrency(invoice.total)}</span>

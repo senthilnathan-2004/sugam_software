@@ -1,11 +1,10 @@
-import { ipcMain, IpcMainInvokeEvent } from 'electron';
-import { PrismaClient } from '@prisma/client';
+import { IpcMainInvokeEvent } from 'electron';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-
-const prisma = new PrismaClient();
-const JWT_SECRET = 'sugam-hms-secret-dev-key-change-in-production';
-const JWT_EXPIRES_IN = '24h';
+import { prisma } from '../db.js';
+import { getJwtSecret } from '../auth-secret.js';
+import { handle } from './authorize.js';
+import { createSession, restoreSession, destroySession, type Session } from '../session.js';
 
 interface LoginPayload {
   email: string;
@@ -15,10 +14,10 @@ interface LoginPayload {
 
 export function registerAuthIpc() {
   // ─── Login Handler ────────────────────────────────────────────────────────
-  ipcMain.handle('auth:login', async (_event: IpcMainInvokeEvent, payload: LoginPayload) => {
+  handle('auth:login', async (_event: IpcMainInvokeEvent, payload: LoginPayload) => {
     try {
-      const email = payload.email.trim();
-      const password = payload.password;
+      const email = String(payload?.email ?? '').trim();
+      const password = String(payload?.password ?? '');
 
       const user = await prisma.user.findUnique({ where: { email } });
 
@@ -32,14 +31,8 @@ export function registerAuthIpc() {
         return { success: false, error: 'Invalid credentials.' };
       }
 
-      const tokenPayload = {
-        userId: user.id,
-        email: user.email,
-        role: user.role,
-        name: user.name,
-      };
-
-      const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+      // Issues a signed token AND registers a server-side session for it.
+      const token = createSession(user);
 
       return {
         success: true,
@@ -59,13 +52,13 @@ export function registerAuthIpc() {
   });
 
   // ─── Token Verify Handler ─────────────────────────────────────────────────
-  ipcMain.handle('auth:verify', async (_event: IpcMainInvokeEvent, token: string) => {
+  // Called at app boot with the persisted token. If it is still valid and the
+  // user is active, we re-establish the in-memory session (which the app
+  // restart cleared) so subsequent IPC calls authenticate.
+  handle('auth:verify', async (_event: IpcMainInvokeEvent, token: string) => {
     try {
-      const decoded = jwt.verify(token, JWT_SECRET) as jwt.JwtPayload & {
+      const decoded = jwt.verify(token, getJwtSecret()) as jwt.JwtPayload & {
         userId: string;
-        email: string;
-        role: string;
-        name: string;
       };
 
       const user = await prisma.user.findUnique({ where: { id: decoded.userId } });
@@ -73,6 +66,8 @@ export function registerAuthIpc() {
       if (!user || !user.isActive) {
         return { valid: false };
       }
+
+      restoreSession(user, token);
 
       return {
         valid: true,
@@ -89,15 +84,32 @@ export function registerAuthIpc() {
     }
   });
 
+  // ─── Logout Handler ────────────────────────────────────────────────────────
+  // Revokes the session server-side so the token can no longer be used, even
+  // before it would expire.
+  handle('auth:logout', async (_event, _data, _session, token) => {
+    destroySession(token);
+    return { success: true };
+  });
+
   // ─── Change Password Handler ───────────────────────────────────────────────
-  ipcMain.handle(
+  // The target user is ALWAYS the authenticated session user — never a userId
+  // taken from the payload (which the renderer could set to someone else's id).
+  handle(
     'auth:change-password',
     async (
       _event: IpcMainInvokeEvent,
-      payload: { userId: string; currentPassword: string; newPassword: string }
+      payload: { currentPassword: string; newPassword: string },
+      session: Session | null
     ) => {
       try {
-        const user = await prisma.user.findUnique({ where: { id: payload.userId } });
+        if (!session) return { success: false, error: 'UNAUTHORIZED' };
+
+        if (!payload?.newPassword || payload.newPassword.length < 8) {
+          return { success: false, error: 'New password must be at least 8 characters.' };
+        }
+
+        const user = await prisma.user.findUnique({ where: { id: session.userId } });
 
         if (!user) return { success: false, error: 'User not found.' };
 
@@ -106,7 +118,7 @@ export function registerAuthIpc() {
 
         const newHash = await bcrypt.hash(payload.newPassword, 12);
         await prisma.user.update({
-          where: { id: payload.userId },
+          where: { id: user.id },
           data: { passwordHash: newHash },
         });
 

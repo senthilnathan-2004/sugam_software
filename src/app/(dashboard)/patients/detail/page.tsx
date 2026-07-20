@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useEffect, useState, use } from 'react';
+import React, { Suspense, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { PageHeader } from '@/components/common/page-header';
 import { PatientProfile } from '@/features/patients/components/patient-profile';
 import { PatientCard } from '@/features/patients/components/patient-card';
@@ -12,22 +13,21 @@ import { Edit } from 'lucide-react';
 import Link from 'next/link';
 import { useAuthStore } from '@/store/auth.store';
 
-interface PatientDetailPageProps {
-  params: Promise<{ id: string }>;
-}
-
-export default function PatientDetailPage({ params }: PatientDetailPageProps) {
-  const { id } = React.use(params);
+// Detail id comes from the `?id=` query string (read client-side), NOT a path
+// segment. Path params (`/patients/[id]`) can't work under `output: 'export'`
+// because arbitrary DB ids aren't known at build time.
+function PatientDetailContent() {
+  const id = useSearchParams().get('id') ?? '';
   const { hasPermission } = useAuthStore();
-  const { currentPatient, isLoading, fetchPatientById } = usePatients();
+  const { currentPatient, isLoading, fetchPatientById, uploadDocument } = usePatients();
 
   useEffect(() => {
-    fetchPatientById(id);
+    if (id) fetchPatientById(id);
   }, [fetchPatientById, id]);
 
   if (isLoading || !currentPatient) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
+      <div className="flex items-center justify-center min-h-100">
         <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary"></div>
       </div>
     );
@@ -53,22 +53,39 @@ export default function PatientDetailPage({ params }: PatientDetailPageProps) {
       {/* Profile summary card */}
       <PatientProfile patient={currentPatient} />
 
+      {/* Timeline (Full width) */}
+      <div className="w-full">
+        <VisitHistory visits={currentPatient.visits} />
+      </div>
+
       {/* Associated widgets grid details */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
-        {/* Left Column — Medical Visits + Documents */}
-        <div className="xl:col-span-2 space-y-6">
-          <VisitHistory visits={currentPatient.visits} />
-          <DocumentUpload documents={currentPatient.documents} />
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-stretch">
+        {/* Left Column — Medical Documents */}
+        <div>
+          <DocumentUpload
+            documents={currentPatient.documents}
+            onUpload={async (file, type) => {
+              return await uploadDocument(currentPatient.id, file, type);
+            }}
+          />
         </div>
 
         {/* Right Column — Printable ID Badge card */}
-        <div className="xl:col-span-1">
-          <div className="sticky top-24 bg-white p-6 border border-slate-100 rounded-hms shadow-md">
-            <h3 className="text-sm font-bold text-slate-800 mb-4">Print Health Card</h3>
+        <div className="h-full">
+          <div className="bg-white p-6 border border-slate-100 rounded-hms shadow-md h-full flex flex-col justify-center items-center">
+            <h3 className="text-sm font-bold text-slate-800 mb-4 self-start">Print Health Card</h3>
             <PatientCard patient={currentPatient} />
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+export default function PatientDetailPage() {
+  return (
+    <Suspense fallback={<div className="min-h-100" />}>
+      <PatientDetailContent />
+    </Suspense>
   );
 }

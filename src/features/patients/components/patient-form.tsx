@@ -205,7 +205,7 @@ export function PatientForm({ initialValues, onSubmit, isLoading }: PatientFormP
 
         {/* Emergency Contact Name */}
         <div className="space-y-1.5">
-          <Label htmlFor="emergencyContactName" className="text-xs font-bold text-slate-700 uppercase tracking-wider">Emergency Contact Person</Label>
+          <Label htmlFor="emergencyContactName" className="text-xs font-bold text-slate-700 uppercase tracking-wider">Emergency Contact Person <span className="text-slate-400 font-medium normal-case">(optional)</span></Label>
           <Input
             id="emergencyContactName"
             placeholder="Jane Doe"
@@ -221,7 +221,7 @@ export function PatientForm({ initialValues, onSubmit, isLoading }: PatientFormP
 
         {/* Emergency Contact Phone */}
         <div className="space-y-1.5">
-          <Label htmlFor="emergencyContactPhone" className="text-xs font-bold text-slate-700 uppercase tracking-wider">Emergency Phone Number</Label>
+          <Label htmlFor="emergencyContactPhone" className="text-xs font-bold text-slate-700 uppercase tracking-wider">Emergency Phone Number <span className="text-slate-400 font-medium normal-case">(optional)</span></Label>
           <Input
             id="emergencyContactPhone"
             placeholder="9876543219"

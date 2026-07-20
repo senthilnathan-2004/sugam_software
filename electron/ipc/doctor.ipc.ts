@@ -1,11 +1,13 @@
-import { ipcMain, IpcMainInvokeEvent } from 'electron';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { IpcMainInvokeEvent } from 'electron';
+import { handle } from './authorize.js';
+import { calculateAge } from '../age.js';
+import { prisma } from '../db.js';
+import { writeAudit } from '../audit.js';
+import type { Session } from '../session.js';
 
 export function registerDoctorIpc() {
   // ─── List Doctors ──────────────────────────────────────────────────────────
-  ipcMain.handle('doctor:list', async (_event: IpcMainInvokeEvent) => {
+  handle('doctor:list', async (_event: IpcMainInvokeEvent) => {
     try {
       const doctors = await prisma.doctor.findMany({
         include: {
@@ -44,7 +46,7 @@ export function registerDoctorIpc() {
   });
 
   // ─── Get Today's Consultation Queue ───────────────────────────────────────
-  ipcMain.handle('doctor:queue', async (_event: IpcMainInvokeEvent, doctorId: string) => {
+  handle('doctor:queue', async (_event: IpcMainInvokeEvent, doctorId: string) => {
     try {
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
@@ -58,7 +60,7 @@ export function registerDoctorIpc() {
           status: { in: ['PENDING', 'CONFIRMED'] },
         },
         include: {
-          patient: { select: { id: true, name: true, age: true, gender: true, patientId: true } },
+          patient: { select: { id: true, name: true, dob: true, gender: true, patientId: true } },
         },
         orderBy: { time: 'asc' },
       });
@@ -68,7 +70,7 @@ export function registerDoctorIpc() {
         patientId: appt.patient.id,
         patientUniqueId: appt.patient.patientId,
         name: appt.patient.name,
-        age: appt.patient.age,
+        age: calculateAge(appt.patient.dob),
         gender: appt.patient.gender,
         time: appt.time,
         status: appt.status,
@@ -82,7 +84,7 @@ export function registerDoctorIpc() {
   });
 
   // ─── Create consultation record (prescriptions & labs) ─────────────────────
-  ipcMain.handle('doctor:consultation:create', async (_event: IpcMainInvokeEvent, payload: any) => {
+  handle('doctor:consultation:create', async (_event: IpcMainInvokeEvent, payload: any, session: Session | null) => {
     try {
       const {
         appointmentId,
@@ -169,15 +171,22 @@ export function registerDoctorIpc() {
         return { consultation, prescription, labRequest };
       });
 
+      await writeAudit(session, 'CREATE', 'Consultation', result.consultation.id);
       return { success: true, data: result };
-    } catch (error) {
+    } catch (error: any) {
       console.error('[doctor:consultation:create] Error:', error);
+      // A consultation is 1:1 with an appointment (Consultation.appointmentId is
+      // @unique). A double-click / retry hits P2002 — say so instead of a
+      // generic failure that looks like the save was lost.
+      if (error?.code === 'P2002') {
+        return { success: false, error: 'A consultation has already been recorded for this appointment.' };
+      }
       return { success: false, error: 'Failed to save consultation details.' };
     }
   });
 
   // ─── Create Walk-in Appointment ────────────────────────────────────────────
-  ipcMain.handle('doctor:appointment:walk-in', async (_event: IpcMainInvokeEvent, payload: { doctorId: string; patientId: string }) => {
+  handle('doctor:appointment:walk-in', async (_event: IpcMainInvokeEvent, payload: { doctorId: string; patientId: string }, session: Session | null) => {
     try {
       const { doctorId, patientId } = payload;
       
@@ -195,6 +204,7 @@ export function registerDoctorIpc() {
         },
       });
 
+      await writeAudit(session, 'CREATE', 'Appointment', appointment.id);
       return { success: true, data: appointment };
     } catch (error) {
       console.error('[doctor:appointment:walk-in] Error:', error);
@@ -202,7 +212,7 @@ export function registerDoctorIpc() {
     }
   });
   // ─── Create Returning Patient Appointment (Reception) ──────────────────────
-  ipcMain.handle('reception:appointment:create', async (_event: IpcMainInvokeEvent, payload: { doctorId: string; patientId: string; type: string }) => {
+  handle('reception:appointment:create', async (_event: IpcMainInvokeEvent, payload: { doctorId: string; patientId: string; type: string }, session: Session | null) => {
     try {
       const { doctorId, patientId, type } = payload;
       
@@ -220,6 +230,7 @@ export function registerDoctorIpc() {
         },
       });
 
+      await writeAudit(session, 'CREATE', 'Appointment', appointment.id);
       return { success: true, data: appointment };
     } catch (error) {
       console.error('[reception:appointment:create] Error:', error);
@@ -228,7 +239,7 @@ export function registerDoctorIpc() {
   });
 
   // ─── Get Single Doctor Details ───────────────────────────────────────────
-  ipcMain.handle('doctor:get', async (_event: IpcMainInvokeEvent, doctorId: string) => {
+  handle('doctor:get', async (_event: IpcMainInvokeEvent, doctorId: string) => {
     try {
       const doc = await prisma.doctor.findUnique({
         where: { id: doctorId },
@@ -256,7 +267,7 @@ export function registerDoctorIpc() {
   });
 
   // ─── Get Doctor Consultation History ─────────────────────────────────────
-  ipcMain.handle('doctor:history', async (_event: IpcMainInvokeEvent, payload: { doctorId: string; date: string }) => {
+  handle('doctor:history', async (_event: IpcMainInvokeEvent, payload: { doctorId: string; date: string }) => {
     try {
       const { doctorId, date } = payload;
       const targetDate = new Date(date);
@@ -273,7 +284,7 @@ export function registerDoctorIpc() {
           status: 'COMPLETED'
         },
         include: {
-          patient: { select: { id: true, patientId: true, name: true, age: true, gender: true } },
+          patient: { select: { id: true, patientId: true, name: true, dob: true, gender: true } },
           consultation: { select: { id: true, diagnosis: true, chiefComplaint: true } }
         },
         orderBy: { time: 'asc' }
@@ -284,7 +295,7 @@ export function registerDoctorIpc() {
         patientId: appt.patient.id,
         patientUniqueId: appt.patient.patientId,
         patientName: appt.patient.name,
-        age: appt.patient.age,
+        age: calculateAge(appt.patient.dob),
         gender: appt.patient.gender,
         time: appt.time,
         type: appt.type,

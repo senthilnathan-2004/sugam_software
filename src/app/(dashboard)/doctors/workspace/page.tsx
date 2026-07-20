@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useEffect, useState, use } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { PageHeader } from '@/components/common/page-header';
 import { TodayQueue } from '@/features/doctors/components/today-queue';
 import { ConsultationForm } from '@/features/doctors/components/consultation-form';
@@ -11,12 +12,10 @@ import { Card } from '@/components/ui/card';
 import { User } from 'lucide-react';
 import type { QueueItem } from '@/features/doctors/types/doctor.types';
 
-interface DoctorWorkspacePageProps {
-  params: Promise<{ id: string }>;
-}
-
-export default function DoctorWorkspacePage({ params }: DoctorWorkspacePageProps) {
-  const { id: doctorId } = use(params);
+// Doctor id comes from the `?id=` query string (read client-side). Path params
+// (`/doctors/[id]`) can't work under `output: 'export'`.
+function DoctorWorkspaceContent() {
+  const doctorId = useSearchParams().get('id') ?? '';
   const { doctors, queue, isLoading: isQueueLoading, fetchDoctors, fetchQueue, saveConsultation } = useDoctor();
   const { currentPatient, fetchPatientById } = usePatients();
 
@@ -107,7 +106,7 @@ export default function DoctorWorkspacePage({ params }: DoctorWorkspacePageProps
               />
             </div>
           ) : (
-            <Card className="p-12 text-center border border-slate-100 rounded-hms shadow bg-white flex flex-col items-center justify-center min-h-[400px]">
+            <Card className="p-12 text-center border border-slate-100 rounded-hms shadow bg-white flex flex-col items-center justify-center min-h-100">
               <div className="p-4 bg-slate-50 text-slate-400 rounded-full mb-4">
                 <User className="h-8 w-8 stroke-[1.5]" />
               </div>
@@ -121,5 +120,13 @@ export default function DoctorWorkspacePage({ params }: DoctorWorkspacePageProps
         </div>
       </div>
     </div>
+  );
+}
+
+export default function DoctorWorkspacePage() {
+  return (
+    <Suspense fallback={<div className="min-h-100" />}>
+      <DoctorWorkspaceContent />
+    </Suspense>
   );
 }

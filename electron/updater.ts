@@ -1,7 +1,17 @@
 import { autoUpdater } from 'electron-updater';
-import { BrowserWindow } from 'electron';
+import { app, BrowserWindow } from 'electron';
 
 export function initUpdater(mainWindow: BrowserWindow) {
+  // This is an offline-first product. Never check for updates in dev (there is
+  // no app-update.yml, which would just log errors), and when packaged an
+  // offline machine or an unreachable feed must degrade to a silent no-op
+  // rather than error/crash. The checkForUpdates promise below is fully
+  // guarded, so a missing feed / no network simply does nothing.
+  if (!app.isPackaged) {
+    return;
+  }
+
+  autoUpdater.autoDownload = false;
   autoUpdater.logger = console;
 
   autoUpdater.on('checking-for-update', () => {

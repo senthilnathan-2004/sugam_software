@@ -8,6 +8,7 @@ import type { Medicine } from '../types/inventory.types';
 import { formatCurrency } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { ConfirmDialog } from '@/components/common/confirm-dialog';
 
 interface MedicineTableProps {
   data: Medicine[];
@@ -18,6 +19,7 @@ interface MedicineTableProps {
 
 export function MedicineTable({ data, isLoading, onDelete, onEdit }: MedicineTableProps) {
   const [viewMed, setViewMed] = useState<Medicine | null>(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const columns: ColumnDef<Medicine>[] = [
     {
@@ -64,14 +66,24 @@ export function MedicineTable({ data, isLoading, onDelete, onEdit }: MedicineTab
         const med = row.original;
         const stock = med.totalStock ?? 0;
         const low = stock <= med.reorderLevel;
+        const perPack = Math.max(1, med.unitsPerPack || 1);
+        const packs = Math.floor(stock / perPack);
+        const loose = stock % perPack;
         return (
-          <span
-            className={`font-mono font-bold px-2 py-0.5 rounded text-xs ${
-              low ? 'bg-rose-50 text-danger border border-rose-200' : 'bg-slate-50 text-slate-700'
-            }`}
-          >
-            {stock} Units
-          </span>
+          <div>
+            <span
+              className={`font-mono font-bold px-2 py-0.5 rounded text-xs ${
+                low ? 'bg-rose-50 text-danger border border-rose-200' : 'bg-slate-50 text-slate-700'
+              }`}
+            >
+              {stock} Units
+            </span>
+            {perPack > 1 && (
+              <p className="text-[10px] text-slate-400 font-bold mt-0.5">
+                {packs} strip{packs === 1 ? '' : 's'}{loose > 0 ? ` + ${loose} loose` : ''}
+              </p>
+            )}
+          </div>
         );
       },
     },
@@ -91,11 +103,7 @@ export function MedicineTable({ data, isLoading, onDelete, onEdit }: MedicineTab
               </Button>
             )}
             {onDelete && (
-              <Button variant="ghost" size="icon" onClick={() => {
-                if (window.confirm('Are you sure you want to delete this medicine?')) {
-                  onDelete(med.id);
-                }
-              }}>
+              <Button variant="ghost" size="icon" onClick={() => setDeleteId(med.id)}>
                 <Trash2 className="h-4 w-4 text-red-500" />
               </Button>
             )}
@@ -146,6 +154,10 @@ export function MedicineTable({ data, isLoading, onDelete, onEdit }: MedicineTab
                   <p className="text-slate-700">{viewMed.unit}</p>
                 </div>
                 <div>
+                  <p className="font-bold text-slate-500 uppercase text-xs tracking-wider">Units Per Pack</p>
+                  <p className="font-mono text-slate-700">{Math.max(1, viewMed.unitsPerPack || 1)}</p>
+                </div>
+                <div>
                   <p className="font-bold text-slate-500 uppercase text-xs tracking-wider">GST Percent</p>
                   <p className="text-slate-700">{viewMed.gstPercent}%</p>
                 </div>
@@ -162,6 +174,19 @@ export function MedicineTable({ data, isLoading, onDelete, onEdit }: MedicineTab
           )}
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!deleteId}
+        onOpenChange={(open) => !open && setDeleteId(null)}
+        title="Delete Medicine"
+        description="This will permanently remove the medicine from your inventory. This action cannot be undone."
+        confirmText="Delete"
+        variant="danger"
+        onConfirm={() => {
+          if (deleteId) onDelete?.(deleteId);
+          setDeleteId(null);
+        }}
+      />
     </>
   );
 }
