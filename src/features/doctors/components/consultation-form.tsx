@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { PrescriptionPrint } from './prescription-print';
+import { calcPrescriptionQuantity } from '@/lib/prescription-qty';
 import type { QueueItem } from '../types/doctor.types';
 
 interface ConsultationFormProps {
@@ -27,6 +28,7 @@ export function ConsultationForm({ queueItem, doctor, onSubmit, isLoading }: Con
       diagnosis: '',
       notes: '',
       nextVisit: '',
+      consultationFee: '',
       medicines: [{ name: '', dosage: '1-0-1', duration: '5 days', instructions: '' }],
       labTests: '',
     },
@@ -36,6 +38,8 @@ export function ConsultationForm({ queueItem, doctor, onSubmit, isLoading }: Con
     control,
     name: 'medicines',
   });
+
+  const watchedMeds = watch('medicines');
 
   const handleSave = async (values: any) => {
     const labTestsArray = values.labTests
@@ -50,6 +54,8 @@ export function ConsultationForm({ queueItem, doctor, onSubmit, isLoading }: Con
       diagnosis: values.diagnosis,
       notes: values.notes,
       nextVisit: values.nextVisit || undefined,
+      // Doctor-reference-only — stored on the consultation, never sent to billing.
+      consultationFee: values.consultationFee ? Number(values.consultationFee) : 0,
       medicines: values.medicines.filter((m: any) => m.name),
       labTests: labTestsArray,
     };
@@ -66,8 +72,13 @@ export function ConsultationForm({ queueItem, doctor, onSubmit, isLoading }: Con
       <div className="space-y-6">
         <div className="flex items-center gap-2.5 p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-success max-w-2xl mx-auto text-xs">
           <CheckCircle2 className="h-4 w-4 shrink-0" />
-          <p className="font-bold">Consultation details successfully logged in database.</p>
+          <p className="font-bold">Consultation completed and sent to Billing.</p>
         </div>
+        {Number(savedData.consultationFee) > 0 && (
+          <div className="max-w-2xl mx-auto text-[11px] text-slate-500 font-semibold px-1">
+            Consultation fee recorded for your reference: ₹{savedData.consultationFee} — not added to the patient&apos;s pharmacy bill.
+          </div>
+        )}
         <PrescriptionPrint
           doctor={doctor}
           patient={queueItem}
@@ -145,6 +156,24 @@ export function ConsultationForm({ queueItem, doctor, onSubmit, isLoading }: Con
             </Label>
             <Input id="nextVisit" type="date" {...register('nextVisit')} className="h-12 rounded-xl text-base max-w-sm" />
           </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="consultationFee" className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+              Consultation Fee (₹) <span className="text-slate-400 normal-case font-medium">— clinical record only</span>
+            </Label>
+            <Input
+              id="consultationFee"
+              type="number"
+              step="any"
+              min="0"
+              placeholder="e.g. 500"
+              {...register('consultationFee')}
+              className="h-12 rounded-xl text-base max-w-sm"
+            />
+            <p className="text-[11px] text-slate-400 font-medium">
+              Saved to this patient&apos;s consultation history for your reference. It is <b>not</b> added to the
+              pharmacy bill, invoice, or any total.
+            </p>
+          </div>
         </div>
       </Card>
 
@@ -198,6 +227,24 @@ export function ConsultationForm({ queueItem, doctor, onSubmit, isLoading }: Con
                   <Label className="text-xs uppercase font-bold text-slate-600">Instructions</Label>
                   <Input placeholder="e.g. Post food" {...register(`medicines.${index}.instructions`)} className="h-11 rounded-lg text-sm bg-white" />
                 </div>
+
+                {/* Live quantity calculation from dosage x duration. */}
+                {(() => {
+                  const d = watchedMeds?.[index];
+                  if (!d?.name) return null;
+                  const calc = calcPrescriptionQuantity(d.dosage || '', d.duration || '');
+                  return (
+                    <p
+                      className={
+                        'text-[11px] font-semibold ' + (calc.supported ? 'text-primary' : 'text-amber-600')
+                      }
+                    >
+                      {calc.supported
+                        ? `Auto quantity: ${calc.quantity} tablet(s) — ${d.dosage} × ${d.duration}. Suggested to Billing; adjust there if needed.`
+                        : "⚠ Can't auto-calculate quantity from this dosage/duration — Billing will enter it manually."}
+                    </p>
+                  );
+                })()}
               </div>
             </div>
           ))}

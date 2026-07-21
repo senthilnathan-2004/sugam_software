@@ -19,6 +19,9 @@ const ALLOWED_PREFIXES = [
   'settings:',
   'backup:',
   'notification:',
+  // Offline multi-PC LAN: local-only deployment + network status/pairing.
+  'deployment:',
+  'lan:',
 ];
 
 /**

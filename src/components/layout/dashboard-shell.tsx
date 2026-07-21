@@ -6,6 +6,7 @@ import { Sidebar } from './sidebar';
 import { Topbar } from './topbar';
 import { LoadingScreen } from '@/components/common/loading-screen';
 import { useAuthStore } from '@/store/auth.store';
+import { ConnectionBanner } from '@/features/lan/components/connection-banner';
 
 const AUTH_STORAGE_KEY = 'sugam-hms-auth';
 
@@ -90,6 +91,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
         {/* Scrollable content area — overflow-y-auto is the scroll fix */}
         <div className="flex-1 overflow-y-auto overflow-x-hidden">
+          {/* Client connection status (renders only in CLIENT mode) */}
+          <div className="px-6 pt-4 empty:hidden">
+            <ConnectionBanner />
+          </div>
           <main className="w-full mx-auto px-6 py-6 pb-16">
             {children}
           </main>

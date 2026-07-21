@@ -28,6 +28,9 @@ export interface ConsultationPayload {
   diagnosis: string;
   notes: string;
   nextVisit?: string;
+  // Doctor-reference-only clinical fee. Stored on the consultation and shown in
+  // the doctor/patient history; NEVER passed to or displayed by billing.
+  consultationFee?: number;
   medicines: {
     name: string;
     dosage: string; // e.g. 1-0-1

@@ -59,26 +59,6 @@ export default function LoginPage() {
         ) : (
           <ForgotPasswordForm onBack={() => setView('login')} />
         )}
-
-        {/* Default Credentials Hint (Development Only) */}
-        <div className="mt-8 p-3.5 bg-slate-50 rounded-xl border border-slate-100">
-          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-            Default Credentials
-          </p>
-          <div className="space-y-0.5">
-            {[
-              { role: 'Admin', email: 'admin@sugamhms.com', password: 'Admin@123' },
-              { role: 'Doctor', email: 'doctor@sugamhms.com', password: 'Doctor@123' },
-              { role: 'Billing', email: 'billing@sugamhms.com', password: 'Billing@123' },
-              { role: 'Reception', email: 'reception@sugamhms.com', password: 'Reception@123' },
-            ].map((c) => (
-              <p key={c.role} className="text-[11px] text-slate-500 font-mono">
-                <span className="text-slate-700 font-bold not-italic font-sans">{c.role}:</span>{' '}
-                {c.email} · {c.password}
-              </p>
-            ))}
-          </div>
-        </div>
       </div>
     </div>
   );

@@ -4,7 +4,18 @@ import * as fs from 'fs';
 import * as xlsx from 'xlsx';
 import { prisma } from '../db.js';
 import { writeAudit } from '../audit.js';
+import { getRequestContext } from '../request-context.js';
 import type { Session } from '../session.js';
+
+function safeParseJsonArray(raw: string | null | undefined): any[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
 
 export function registerBillingIpc() {
   // ─── List Invoices ────────────────────────────────────────────────────────
@@ -47,10 +58,23 @@ export function registerBillingIpc() {
         paymentMode,
         paymentStatus,
         payments, // Split payments array [{mode, amount}]
+        consultationId, // link to the exact billed visit (optional; absent for walk-in/direct)
+        idempotencyKey, // dedupe critical resubmits over the LAN (spec §31)
       } = data;
 
       if (!Array.isArray(items) || items.length === 0) {
         return { success: false, error: 'Invoice must contain at least one item.' };
+      }
+
+      // Idempotency (spec §31): a resubmit carrying the same key returns the
+      // ORIGINAL invoice — no duplicate, no second stock deduction.
+      const idemKey = typeof idempotencyKey === 'string' && idempotencyKey ? idempotencyKey : null;
+      if (idemKey) {
+        const existing = await prisma.invoice.findUnique({ where: { idempotencyKey: idemKey } });
+        if (existing) {
+          console.log(`[billing:invoice:create] idempotent replay → returning ${existing.invoiceNo}`);
+          return { success: true, data: existing };
+        }
       }
 
       const toNum = (v: any) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
@@ -67,13 +91,32 @@ export function registerBillingIpc() {
       const runSale = () =>
         prisma.$transaction(
           async (tx) => {
+            // -1. Resolve + guard the billed consultation (spec §10/§29). When a
+            //     consultationId is supplied, patient/doctor come from the
+            //     authoritative visit (never the client), and an already-BILLED
+            //     (or not-ready) consultation is rejected — the application-level
+            //     half of the duplicate-billing guard; the Invoice.consultationId
+            //     @unique index is the database-level half.
+            let linkConsultationId: string | null = null;
+            let resolvedPatientId: string | null = patientId || null;
+            let resolvedDoctorId: string | null = doctorId || null;
+            if (consultationId) {
+              const consult = await tx.consultation.findUnique({
+                where: { id: String(consultationId) },
+                include: { appointment: { select: { patientId: true } } },
+              });
+              if (!consult) throw new Error('CONSULTATION_NOT_FOUND');
+              if (consult.billingStatus !== 'READY_FOR_BILLING') throw new Error('CONSULTATION_ALREADY_BILLED');
+              linkConsultationId = consult.id;
+              resolvedPatientId = consult.appointment?.patientId ?? resolvedPatientId;
+              resolvedDoctorId = consult.doctorId;
+            }
+
             // 0. Resolve AUTHORITATIVE unit price + GST% from the DB for every
-            //    stocked line. The renderer sends price/gstPercent/total but they
-            //    MUST NOT be trusted: a tampered IPC call could set total=0 (or a
-            //    slashed GST%) while still deducting real stock. We look up the
-            //    Medicine row and recompute every amount server-side; the client
-            //    figures are ignored. Non-stock lines (no medicineId) keep their
-            //    supplied price (e.g. a manual consultation fee).
+            //    line. The renderer sends price/gstPercent/total but they MUST
+            //    NOT be trusted: a tampered call could set total=0 (or a slashed
+            //    GST%) while still deducting real stock. We look up the Medicine
+            //    row and recompute every amount server-side.
             const medIds = Array.from(
               new Set(items.filter((i: any) => i.medicineId).map((i: any) => i.medicineId))
             );
@@ -84,6 +127,17 @@ export function registerBillingIpc() {
                 })
               : [];
             const medMap = new Map(medRows.map((m) => [m.id, m]));
+
+            // Matching safety (spec correction #3, server-side enforcement):
+            // billing is STRICTLY medicine-only. Every line must resolve to a
+            // real inventory medicine — no free-text/unmatched/fee lines. This is
+            // the server backstop for the Billing UI's manual-confirm rule; a
+            // consultation fee is never a line here.
+            for (const it of items as any[]) {
+              if (!it?.medicineId || !medMap.has(it.medicineId)) {
+                throw new Error('UNRESOLVED_LINE');
+              }
+            }
 
             let subtotalCalc = 0;
             let gstCalc = 0;
@@ -156,8 +210,10 @@ export function registerBillingIpc() {
             const invoice = await tx.invoice.create({
               data: {
                 invoiceNo,
-                patientId: patientId || null,
-                doctorId: doctorId || null,
+                // Patient/doctor come from the authoritative consultation when
+                // billing a visit; otherwise from the (walk-in/direct) payload.
+                patientId: resolvedPatientId,
+                doctorId: resolvedDoctorId,
                 walkinName: walkinName || null,
                 walkinPhone: walkinPhone || null,
                 walkinEmail: walkinEmail || null,
@@ -170,8 +226,21 @@ export function registerBillingIpc() {
                 paymentMode,
                 paymentStatus,
                 isReturn: false,
+                // Durable link + DB-level duplicate-billing guard (@unique).
+                consultationId: linkConsultationId,
+                idempotencyKey: idemKey,
               },
             });
+
+            // Atomically flip the exact consultation to BILLED in the same tx —
+            // a rollback leaves it READY_FOR_BILLING (spec §10/§29). The
+            // consultation fee is never read or touched here.
+            if (linkConsultationId) {
+              await tx.consultation.update({
+                where: { id: linkConsultationId },
+                data: { billingStatus: 'BILLED' },
+              });
+            }
 
             // 3. Create associated Payment records
             if (payments && payments.length > 0) {
@@ -195,14 +264,18 @@ export function registerBillingIpc() {
               });
             }
 
-            // 4. Log audit event
+            // 4. Log audit event (with device/source attribution for LAN sales).
             if (session) {
+              const ctx = getRequestContext();
               await tx.auditLog.create({
                 data: {
                   userId: session.userId,
                   action: 'CREATE',
                   entity: 'Invoice',
                   entityId: invoice.id,
+                  deviceId: ctx?.device?.id ?? null,
+                  deviceName: ctx?.device?.name ?? null,
+                  source: ctx?.source ?? 'LOCAL',
                 },
               });
             }
@@ -218,8 +291,27 @@ export function registerBillingIpc() {
           result = await runSale();
           break;
         } catch (e: any) {
-          // P2002 = unique constraint (invoiceNo). Recompute + retry a few times.
-          if (e?.code === 'P2002' && attempt < 5) continue;
+          if (e?.code === 'P2002') {
+            const target = Array.isArray(e?.meta?.target)
+              ? e.meta.target.join(',')
+              : String(e?.meta?.target ?? '');
+            // A concurrent identical submit won the race on the idempotency key:
+            // return the invoice it created instead of erroring or duplicating.
+            if (target.includes('idempotencyKey') && idemKey) {
+              const existing = await prisma.invoice.findUnique({ where: { idempotencyKey: idemKey } });
+              if (existing) {
+                result = existing;
+                break;
+              }
+            }
+            // A concurrent bill already claimed this consultation (DB-level
+            // duplicate-billing guard) — do NOT retry with a new number.
+            if (target.includes('consultationId')) {
+              return { success: false, error: 'This consultation has already been billed.' };
+            }
+            // Otherwise it's an invoiceNo collision — recompute + retry a few times.
+            if (attempt < 5) continue;
+          }
           throw e;
         }
       }
@@ -249,6 +341,19 @@ export function registerBillingIpc() {
     } catch (error: any) {
       if (typeof error?.message === 'string' && error.message.startsWith('INSUFFICIENT_STOCK:')) {
         return { success: false, error: `Insufficient stock for ${error.message.split(':')[1]}.` };
+      }
+      if (error?.message === 'CONSULTATION_NOT_FOUND') {
+        return { success: false, error: 'The consultation for this bill no longer exists.' };
+      }
+      if (error?.message === 'CONSULTATION_ALREADY_BILLED') {
+        return { success: false, error: 'This consultation has already been billed.' };
+      }
+      if (error?.message === 'UNRESOLVED_LINE') {
+        return {
+          success: false,
+          error:
+            'Every billed item must be matched to a medicine in inventory. Confirm each prescribed item or mark it as not dispensed before generating the bill.',
+        };
       }
       console.error('[billing:invoice:create] Error:', error);
       return { success: false, error: 'Failed to create invoice.' };
@@ -413,6 +518,108 @@ export function registerBillingIpc() {
     } catch (error) {
       console.error('[billing:patient:prescriptions] Error:', error);
       return { success: false, error: 'Failed to fetch prescriptions.' };
+    }
+  });
+
+  // ─── Ready-for-Billing queue (spec §8/§28) ─────────────────────────────────
+  // Completed consultations awaiting billing, tied to the EXACT visit. This is
+  // the live queue billing works from — it replaces guessing a patient's latest
+  // prescription. consultationFee is NEVER selected/returned (doctor-only).
+  handle('billing:ready-queue', async () => {
+    try {
+      const consultations = await prisma.consultation.findMany({
+        where: {
+          billingStatus: 'READY_FOR_BILLING',
+          appointment: { status: 'COMPLETED' },
+        },
+        select: {
+          id: true,
+          completedAt: true,
+          billingStatus: true,
+          prescription: { select: { medicines: true } },
+          doctor: { select: { user: { select: { name: true } } } },
+          appointment: {
+            select: { patient: { select: { id: true, patientId: true, name: true, phone: true } } },
+          },
+        },
+        orderBy: { completedAt: 'asc' }, // oldest first (spec §28)
+      });
+
+      const queue = consultations
+        .filter((c) => c.appointment?.patient)
+        .map((c) => {
+          const meds = safeParseJsonArray(c.prescription?.medicines);
+          return {
+            consultationId: c.id,
+            completedAt: c.completedAt,
+            billingStatus: c.billingStatus,
+            patient: c.appointment!.patient,
+            doctorName: c.doctor?.user?.name ?? 'Doctor',
+            prescriptionSummary: meds
+              .map((m: any) => (typeof m?.name === 'string' ? m.name : null))
+              .filter(Boolean)
+              .slice(0, 6),
+            itemCount: meds.length,
+          };
+        });
+
+      return { success: true, data: queue };
+    } catch (error) {
+      console.error('[billing:ready-queue] Error:', error);
+      return { success: false, error: 'Failed to load the billing queue.' };
+    }
+  });
+
+  // ─── Load one exact consultation for billing (spec §8/§28) ─────────────────
+  // Returns the specific visit's patient + doctor + prescription VERBATIM. The
+  // prescription is the immutable clinical record and is never modified here.
+  // consultationFee is NEVER selected/returned. Inventory matching is done in
+  // the Billing UI under the strict manual-confirm rule.
+  handle('billing:consultation:load', async (_event: IpcMainInvokeEvent, data: { consultationId?: string }) => {
+    try {
+      const consultationId = typeof data?.consultationId === 'string' ? data.consultationId : '';
+      if (!consultationId) return { success: false, error: 'Missing consultation id.' };
+
+      const c = await prisma.consultation.findUnique({
+        where: { id: consultationId },
+        select: {
+          id: true,
+          billingStatus: true,
+          diagnosis: true,
+          notes: true,
+          prescription: { select: { medicines: true, instructions: true } },
+          doctor: { select: { user: { select: { name: true } } } },
+          appointment: {
+            select: {
+              patient: {
+                select: { id: true, patientId: true, name: true, phone: true, age: true, gender: true },
+              },
+            },
+          },
+        },
+      });
+
+      if (!c) return { success: false, error: 'Consultation not found.' };
+      if (c.billingStatus === 'BILLED') {
+        return { success: false, code: 'ALREADY_BILLED', error: 'This visit has already been billed.' };
+      }
+
+      return {
+        success: true,
+        data: {
+          consultationId: c.id,
+          billingStatus: c.billingStatus,
+          diagnosis: c.diagnosis,
+          notes: c.notes,
+          doctorName: c.doctor?.user?.name ?? 'Doctor',
+          patient: c.appointment?.patient ?? null,
+          medicines: safeParseJsonArray(c.prescription?.medicines),
+          instructions: c.prescription?.instructions ?? '',
+        },
+      };
+    } catch (error) {
+      console.error('[billing:consultation:load] Error:', error);
+      return { success: false, error: 'Failed to load the consultation.' };
     }
   });
 

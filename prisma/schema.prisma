@@ -29,14 +29,20 @@ model User {
 }
 
 model AuditLog {
-  id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  action    String
-  entity    String
-  entityId  String?
-  metadata  String?  // JSON string
-  timestamp DateTime @default(now())
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action     String
+  entity     String
+  entityId   String?
+  metadata   String?  // JSON string
+  // Multi-PC LAN attribution (spec §25): which device the mutation came from and
+  // whether it originated from a local IPC call or a LAN client. All nullable so
+  // standalone rows and historical data are unaffected.
+  deviceId   String?
+  deviceName String?
+  source     String?  // LOCAL | LAN
+  timestamp  DateTime @default(now())
 
   @@index([userId])
   @@index([timestamp])
@@ -163,10 +169,24 @@ model Consultation {
   diagnosis      String
   notes          String
   nextVisit      DateTime?
+  // Billing lifecycle (spec §10): IN_CONSULTATION -> READY_FOR_BILLING -> BILLED.
+  // A consultation becomes READY_FOR_BILLING ONLY when the doctor explicitly
+  // completes it (doctor.ipc.ts). Historical/legacy rows are backfilled to
+  // 'CLOSED' by the migration so they can never auto-appear in the billing
+  // queue. New rows default to IN_CONSULTATION and are set explicitly on
+  // completion — the DB default is never relied upon.
+  billingStatus  String         @default("IN_CONSULTATION")
+  completedAt    DateTime?
+  // DOCTOR-REFERENCE-ONLY clinical field. NEVER read by, transferred to, or
+  // rendered/printed by the Billing module, invoice, totals, payments, or
+  // revenue/reports. Exposed only via DOCTOR/ADMIN doctor:* channels.
+  consultationFee Float         @default(0)
   prescription   Prescription?
   labRequest     LabRequest?
+  invoice        Invoice?
 
   @@index([doctorId])
+  @@index([billingStatus])
 }
 
 model Prescription {
@@ -295,6 +315,17 @@ model Invoice {
   paymentMode   String         // CASH, UPI, CARD, SPLIT
   paymentStatus String         // PAID, PENDING
   isReturn      Boolean        @default(false)
+  // Durable link to the exact consultation this bill settled (spec §10/§27/§28).
+  // @unique makes duplicate billing of one consultation structurally impossible
+  // (a concurrent second bill fails P2002). Optional: walk-in / direct-pharmacy
+  // sales have no consultation. SetNull keeps the financial record if the
+  // consultation is ever removed.
+  consultationId String?       @unique
+  consultation   Consultation? @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+  // Idempotency guard for critical mutations over an unreliable LAN (spec §31):
+  // a resubmit carrying the same key returns the original invoice instead of
+  // creating a duplicate / re-deducting stock.
+  idempotencyKey String?       @unique
   payments      Payment[]
   returns       InvoiceReturn?
 
@@ -343,4 +374,18 @@ model Backup {
   size      Int
   type      String   // AUTO, MANUAL
   status    String   // SUCCESS, FAILED
+}
+
+// Paired LAN client devices (spec §17/§25). Lives in the Host's authoritative
+// DB. `tokenHash` is a sha256 of the device credential — the plaintext token is
+// returned to the client once at pairing time and never stored server-side.
+model Device {
+  id         String    @id @default(uuid())
+  name       String
+  tokenHash  String
+  pairedAt   DateTime  @default(now())
+  lastSeenAt DateTime?
+  revoked    Boolean   @default(false)
+
+  @@index([revoked])
 }

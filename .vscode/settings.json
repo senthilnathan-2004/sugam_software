@@ -7,5 +7,24 @@
   "css.customData": [
     ".vscode/tailwindcss-custom-data.json"
   ],
-  "css.lint.unknownAtRules": "ignore"
+  "css.lint.unknownAtRules": "ignore",
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/.next/**": true,
+    "**/out/**": true,
+    "**/dist/**": true,
+    "**/release*/**": true,
+    "**/backups/**": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/.next": true,
+    "**/out": true,
+    "**/dist": true,
+    "**/release*": true,
+    "**/backups": true
+  },
+  "files.exclude": {
+    "**/release*": true
+  }
 }

@@ -1,9 +1,40 @@
 import { IpcMainInvokeEvent } from 'electron';
+import { z } from 'zod';
 import { handle } from './authorize.js';
 import { calculateAge } from '../age.js';
 import { prisma } from '../db.js';
 import { writeAudit } from '../audit.js';
+import { calcPrescriptionQuantity } from '../prescription-qty.js';
 import type { Session } from '../session.js';
+
+/** Resolve the Doctor row linked to a user account (server-side identity). */
+async function getDoctorForUser(userId: string) {
+  return prisma.doctor.findUnique({ where: { userId } });
+}
+
+function safeParseJsonArray(raw: string | null | undefined): unknown[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+// Fast doctor-facing registration (spec §6): only the essentials are required;
+// the rest default to '' (the columns are NOT NULL but accept empty strings).
+const QuickPatientSchema = z.object({
+  name: z.string().trim().min(1, 'Patient name is required.'),
+  phone: z.string().trim().min(1, 'Mobile number is required.'),
+  dob: z
+    .union([z.string(), z.date()])
+    .refine((v) => !Number.isNaN(new Date(v as string | Date).getTime()), 'A valid date of birth is required.'),
+  gender: z.string().trim().min(1, 'Gender is required.'),
+  bloodGroup: z.string().trim().optional(),
+  address: z.string().trim().optional(),
+  email: z.string().trim().email('Enter a valid email.').or(z.literal('')).optional(),
+});
 
 export function registerDoctorIpc() {
   // ─── List Doctors ──────────────────────────────────────────────────────────
@@ -46,8 +77,18 @@ export function registerDoctorIpc() {
   });
 
   // ─── Get Today's Consultation Queue ───────────────────────────────────────
-  handle('doctor:queue', async (_event: IpcMainInvokeEvent, doctorId: string) => {
+  handle('doctor:queue', async (_event: IpcMainInvokeEvent, doctorId: string, session: Session | null) => {
     try {
+      // Doctor isolation (spec §34): a DOCTOR only ever sees their OWN queue —
+      // the requested doctorId is ignored and forced to the caller's own. ADMIN
+      // may inspect any doctor's queue via the passed doctorId.
+      let effectiveDoctorId = doctorId;
+      if (session && session.role === 'DOCTOR') {
+        const own = await getDoctorForUser(session.userId);
+        if (!own) return { success: true, data: [] };
+        effectiveDoctorId = own.id;
+      }
+
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       const todayEnd = new Date();
@@ -55,7 +96,7 @@ export function registerDoctorIpc() {
 
       const appointments = await prisma.appointment.findMany({
         where: {
-          doctorId,
+          doctorId: effectiveDoctorId,
           date: { gte: todayStart, lte: todayEnd },
           status: { in: ['PENDING', 'CONFIRMED'] },
         },
@@ -83,23 +124,53 @@ export function registerDoctorIpc() {
     }
   });
 
-  // ─── Create consultation record (prescriptions & labs) ─────────────────────
+  // ─── Complete consultation (prescriptions, labs) → Ready for Billing ───────
   handle('doctor:consultation:create', async (_event: IpcMainInvokeEvent, payload: any, session: Session | null) => {
     try {
-      const {
-        appointmentId,
-        doctorId,
-        patientId,
-        chiefComplaint,
-        diagnosis,
-        notes,
-        nextVisit,
-        medicines,
-        labTests,
-      } = payload;
+      if (!session) return { success: false, error: 'Not authenticated.' };
+      const { appointmentId, chiefComplaint, diagnosis, notes, nextVisit, medicines, labTests, consultationFee } =
+        payload ?? {};
+      if (!appointmentId) return { success: false, error: 'Missing appointment.' };
+
+      // Server-side doctor auto-assignment (spec §5/§34): a DOCTOR always acts as
+      // themselves; the client-supplied doctorId is ignored. Only ADMIN may
+      // record on behalf of another doctor (explicit override).
+      const ownDoctor = await getDoctorForUser(session.userId);
+      let doctorId: string | undefined;
+      if (session.role === 'ADMIN') {
+        doctorId = (typeof payload?.doctorId === 'string' && payload.doctorId) || ownDoctor?.id;
+      } else {
+        if (!ownDoctor) return { success: false, error: 'Your account is not linked to a doctor profile.' };
+        doctorId = ownDoctor.id;
+      }
+      if (!doctorId) return { success: false, error: 'No doctor could be resolved for this consultation.' };
+
+      // Consultation fee is a DOCTOR-REFERENCE-ONLY clinical value.
+      const feeNum = Number(consultationFee);
+      const fee = Number.isFinite(feeNum) && feeNum >= 0 ? feeNum : 0;
+
+      // Compute the total dispense quantity per medicine from dosage x duration
+      // and store it WITH the prescription (authoritative). Unsupported/free-text
+      // dosage → quantity:null (billing must then set it manually — never guessed).
+      const augmentedMedicines = Array.isArray(medicines)
+        ? medicines.map((mm: any) => ({
+            ...mm,
+            quantity: calcPrescriptionQuantity(String(mm?.dosage ?? ''), String(mm?.duration ?? '')).quantity,
+          }))
+        : [];
 
       const result = await prisma.$transaction(async (tx) => {
-        // 1. Create Consultation
+        const appt = await tx.appointment.findUnique({ where: { id: appointmentId } });
+        if (!appt) throw new Error('APPT_NOT_FOUND');
+        // Ownership (spec §34): cannot complete another doctor's appointment.
+        if (session.role !== 'ADMIN' && appt.doctorId !== doctorId) {
+          throw new Error('NOT_YOUR_APPOINTMENT');
+        }
+        // Patient/doctor are taken from the authoritative appointment, never the
+        // client payload.
+        const patientId = appt.patientId;
+        const now = new Date();
+
         const consultation = await tx.consultation.create({
           data: {
             appointmentId,
@@ -108,42 +179,37 @@ export function registerDoctorIpc() {
             diagnosis,
             notes,
             nextVisit: nextVisit ? new Date(nextVisit) : null,
+            // Explicit doctor completion is the ONLY transition into the billing
+            // queue (spec §10). Historical rows stay 'CLOSED'.
+            billingStatus: 'READY_FOR_BILLING',
+            completedAt: now,
+            consultationFee: fee,
           },
         });
 
-        // 2. Create Prescription if medicines provided
         let prescription = null;
-        if (medicines && medicines.length > 0) {
+        if (augmentedMedicines.length > 0) {
           prescription = await tx.prescription.create({
             data: {
               consultationId: consultation.id,
               doctorId,
               patientId,
-              medicines: JSON.stringify(medicines),
+              // Stores name/dosage/duration/instructions + the calculated quantity.
+              medicines: JSON.stringify(augmentedMedicines),
               instructions: notes,
             },
           });
         }
 
-        // 3. Create Lab Request if tests provided
         let labRequest = null;
         if (labTests && labTests.length > 0) {
           labRequest = await tx.labRequest.create({
-            data: {
-              consultationId: consultation.id,
-              tests: JSON.stringify(labTests),
-              status: 'PENDING',
-            },
+            data: { consultationId: consultation.id, tests: JSON.stringify(labTests), status: 'PENDING' },
           });
         }
 
-        // 4. Update appointment status to COMPLETED
-        await tx.appointment.update({
-          where: { id: appointmentId },
-          data: { status: 'COMPLETED' },
-        });
+        await tx.appointment.update({ where: { id: appointmentId }, data: { status: 'COMPLETED' } });
 
-        // 5. Add PatientVisit log
         await tx.patientVisit.create({
           data: {
             patientId,
@@ -155,17 +221,16 @@ export function registerDoctorIpc() {
           },
         });
 
-        // 6. System Notification
         await tx.notification.create({
           data: {
             title: 'Consultation Completed',
-            message: `Consultation for appointment ${appointmentId} was successfully completed.`,
+            message: 'A consultation was completed and sent to Billing.',
             type: 'SUCCESS',
             priority: 'LOW',
             category: 'DOCTOR',
             relatedEntityId: consultation.id,
             relatedEntityType: 'Consultation',
-          }
+          },
         });
 
         return { consultation, prescription, labRequest };
@@ -175,13 +240,155 @@ export function registerDoctorIpc() {
       return { success: true, data: result };
     } catch (error: any) {
       console.error('[doctor:consultation:create] Error:', error);
-      // A consultation is 1:1 with an appointment (Consultation.appointmentId is
-      // @unique). A double-click / retry hits P2002 — say so instead of a
-      // generic failure that looks like the save was lost.
+      if (error?.message === 'APPT_NOT_FOUND') return { success: false, error: 'That appointment no longer exists.' };
+      if (error?.message === 'NOT_YOUR_APPOINTMENT')
+        return { success: false, error: 'You can only complete your own consultations.' };
+      // Consultation is 1:1 with an appointment (@unique) — a double-click/retry
+      // hits P2002; report it clearly instead of looking like a lost save.
       if (error?.code === 'P2002') {
         return { success: false, error: 'A consultation has already been recorded for this appointment.' };
       }
       return { success: false, error: 'Failed to save consultation details.' };
+    }
+  });
+
+  // ─── Resolve the caller's own Doctor profile (replaces client `doctors[0]`) ─
+  handle('doctor:me', async (_event: IpcMainInvokeEvent, _data: unknown, session: Session | null) => {
+    if (!session) return { success: false, error: 'Not authenticated.' };
+    const doc = await getDoctorForUser(session.userId);
+    if (!doc) return { success: false, error: 'Your account is not linked to a doctor profile.' };
+    return {
+      success: true,
+      data: {
+        id: doc.id,
+        userId: doc.userId,
+        name: session.name,
+        specialization: doc.specialization,
+        license: doc.license,
+        qualification: doc.qualification,
+      },
+    };
+  });
+
+  // ─── Get one consultation (DOCTOR/ADMIN) — the ONLY place the fee is exposed ─
+  handle('doctor:consultation:get', async (_event: IpcMainInvokeEvent, data: { consultationId?: string }, session: Session | null) => {
+    const consultationId = typeof data?.consultationId === 'string' ? data.consultationId : '';
+    if (!consultationId) return { success: false, error: 'Missing consultation id.' };
+    const c = await prisma.consultation.findUnique({
+      where: { id: consultationId },
+      include: {
+        prescription: true,
+        appointment: { include: { patient: { select: { id: true, patientId: true, name: true, phone: true } } } },
+        doctor: { include: { user: { select: { name: true } } } },
+      },
+    });
+    if (!c) return { success: false, error: 'Consultation not found.' };
+    // Doctor isolation: a DOCTOR may only read their own consultation record.
+    if (session && session.role === 'DOCTOR') {
+      const own = await getDoctorForUser(session.userId);
+      if (!own || c.doctorId !== own.id) {
+        return { success: false, error: 'You can only view your own consultations.' };
+      }
+    }
+    return {
+      success: true,
+      data: {
+        id: c.id,
+        completedAt: c.completedAt,
+        billingStatus: c.billingStatus,
+        // Doctor-reference-only clinical fee — surfaced ONLY on this DOCTOR/ADMIN
+        // channel, never on any billing channel.
+        consultationFee: c.consultationFee,
+        chiefComplaint: c.chiefComplaint,
+        diagnosis: c.diagnosis,
+        notes: c.notes,
+        doctorName: c.doctor?.user?.name ?? '',
+        patient: c.appointment?.patient ?? null,
+        medicines: safeParseJsonArray(c.prescription?.medicines),
+        instructions: c.prescription?.instructions ?? '',
+      },
+    };
+  });
+
+  // ─── Register a NEW patient and start a visit in one step (spec §6/§32) ─────
+  handle('doctor:patient:register-and-visit', async (_event: IpcMainInvokeEvent, data: any, session: Session | null) => {
+    try {
+      if (!session) return { success: false, error: 'Not authenticated.' };
+
+      // Resolve the consulting doctor server-side (auto-assign).
+      let doctor = await getDoctorForUser(session.userId);
+      if (session.role === 'ADMIN' && typeof data?.doctorId === 'string' && data.doctorId) {
+        doctor = await prisma.doctor.findUnique({ where: { id: data.doctorId } });
+      }
+      if (!doctor) return { success: false, error: 'Your account is not linked to a doctor profile.' };
+
+      const parsed = QuickPatientSchema.safeParse(data?.patient ?? data);
+      if (!parsed.success) {
+        return { success: false, error: parsed.error.issues[0]?.message ?? 'Invalid patient details.' };
+      }
+      const p = parsed.data;
+      const forceNew = data?.forceNew === true;
+
+      // Duplicate guard (spec §6): never silently create a duplicate patient for
+      // an existing mobile number. Surface candidates so the doctor can open the
+      // existing record instead — or explicitly confirm a new one (forceNew).
+      if (!forceNew) {
+        const existing = await prisma.patient.findMany({
+          where: { phone: p.phone, isDeleted: false },
+          select: { id: true, patientId: true, name: true, phone: true },
+          take: 5,
+        });
+        if (existing.length > 0) {
+          return {
+            success: false,
+            code: 'DUPLICATE_PHONE',
+            error: 'A patient with this mobile number already exists.',
+            data: { candidates: existing },
+          };
+        }
+      }
+
+      const dobDate = new Date(p.dob);
+      const result = await prisma.$transaction(async (tx) => {
+        const count = await tx.patient.count();
+        const patientId = `P-${String(count + 1).padStart(5, '0')}`;
+        const patient = await tx.patient.create({
+          data: {
+            patientId,
+            name: p.name,
+            dob: dobDate,
+            age: calculateAge(dobDate),
+            gender: p.gender,
+            bloodGroup: p.bloodGroup || '',
+            phone: p.phone,
+            email: p.email || null,
+            address: p.address || '',
+            emergencyContactName: '',
+            emergencyContactPhone: '',
+          },
+        });
+
+        const now = new Date();
+        const appointment = await tx.appointment.create({
+          data: {
+            patientId: patient.id,
+            doctorId: doctor!.id,
+            date: now,
+            time: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
+            status: 'PENDING',
+            type: 'FIRST_VISIT',
+          },
+        });
+
+        return { patient, appointmentId: appointment.id };
+      });
+
+      await writeAudit(session, 'CREATE', 'Patient', result.patient.id, { via: 'doctor-register-and-visit' });
+      await writeAudit(session, 'CREATE', 'Appointment', result.appointmentId);
+      return { success: true, data: result };
+    } catch (error) {
+      console.error('[doctor:patient:register-and-visit] Error:', error);
+      return { success: false, error: 'Failed to register the patient and start a visit.' };
     }
   });
 

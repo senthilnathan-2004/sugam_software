@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { PrismaClient } from '@prisma/client';
 import { prisma, getDbFilePath } from './db.js';
+import { getMode } from './deployment.js';
 
 /**
  * Shared backup routine used by BOTH the manual IPC trigger (backup:create) and
@@ -17,7 +18,13 @@ import { prisma, getDbFilePath } from './db.js';
  * `PRAGMA integrity_check`. Returns true only if SQLite reports "ok".
  */
 export async function verifyDatabaseFile(filePath: string): Promise<boolean> {
-  const url = `file:${filePath.replace(/\\/g, '/')}`;
+  // Use the EXACT URL form the app's working main client uses (env.ts sets
+  // DATABASE_URL = 'file:' + <native path>). Converting to forward slashes here
+  // produced `file:C:/...`, which Prisma's SQLite connector failed to open on
+  // Windows (SQLITE_CANTOPEN / "Error code 14") — so every verify, and thus every
+  // scheduled backup, was silently discarded. `connection_limit=1` keeps this a
+  // single short-lived handle that releases the file promptly.
+  const url = `file:${path.resolve(filePath)}?connection_limit=1`;
   const checkClient = new PrismaClient({ datasources: { db: { url } } });
   try {
     const rows = await checkClient.$queryRawUnsafe<Array<Record<string, unknown>>>(
@@ -57,6 +64,10 @@ export async function runBackup(opts: {
 }): Promise<RunBackupResult> {
   const { type } = opts;
   try {
+    // A Client owns no operational database — it must never back one up.
+    if (getMode() === 'CLIENT') {
+      return { ok: false, error: 'Backups run on the Main/Host computer only.' };
+    }
     const dbPath = getDbFilePath();
     if (!fs.existsSync(dbPath)) {
       return { ok: false, error: 'Source SQLite database not found.' };

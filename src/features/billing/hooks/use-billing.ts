@@ -85,6 +85,41 @@ export function useBilling() {
   const [prescribedMedicines, setPrescribedMedicines] = useState<any[]>([]);
   const [consultationDetails, setConsultationDetails] = useState<{ diagnosis?: string; notes?: string } | null>(null);
 
+  // Ready-for-Billing queue: completed consultations awaiting billing, tied to
+  // the EXACT visit (spec §8/§28). Never carries the consultation fee.
+  const [readyQueue, setReadyQueue] = useState<any[]>([]);
+
+  const fetchReadyQueue = useCallback(async () => {
+    if (typeof window !== 'undefined' && window.electronAPI) {
+      try {
+        const res = await window.electronAPI.invoke('billing:ready-queue');
+        setReadyQueue(res?.success ? res.data || [] : []);
+      } catch {
+        setReadyQueue([]);
+      }
+    }
+  }, []);
+
+  // Load ONE exact consultation's prescription (not "the patient's latest").
+  const loadConsultation = useCallback(async (consultationId: string) => {
+    if (typeof window !== 'undefined' && window.electronAPI) {
+      try {
+        const res = await window.electronAPI.invoke('billing:consultation:load', { consultationId });
+        if (res?.success) {
+          setPrescribedMedicines(res.data.medicines || []);
+          setConsultationDetails({ diagnosis: res.data.diagnosis, notes: res.data.notes });
+          return res.data; // { consultationId, patient, doctorName, medicines, instructions, ... }
+        }
+        toast.error(res?.error || 'Could not load the selected visit.');
+        return null;
+      } catch {
+        toast.error('Could not load the selected visit.');
+        return null;
+      }
+    }
+    return null;
+  }, []);
+
   const fetchPatientPrescriptions = useCallback(async (patientId: string) => {
     if (!patientId) {
       setPrescribedMedicines([]);
@@ -180,5 +215,8 @@ export function useBilling() {
     shareInvoiceWhatsApp,
     exportInvoices,
     importInvoices,
+    readyQueue,
+    fetchReadyQueue,
+    loadConsultation,
   };
 }

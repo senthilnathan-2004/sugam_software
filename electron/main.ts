@@ -10,6 +10,7 @@ import { initLogger } from './logger.js';
 import { registerAppScheme, serveApp, APP_URL } from './staticServe.js';
 import { initDatabasePragmas } from './db.js';
 import { applyPendingMigrations } from './migrate.js';
+import { getMode } from './deployment.js';
 
 // IPC Registries
 import { registerAuthIpc } from './ipc/auth.ipc.js';
@@ -22,12 +23,19 @@ import { registerReportsIpc } from './ipc/reports.ipc.js';
 import { registerSettingsIpc } from './ipc/settings.ipc.js';
 import { registerBackupIpc } from './ipc/backup.ipc.js';
 import { registerNotificationIPC } from './ipc/notification.ipc.js';
+import { registerDeploymentIpc } from './ipc/deployment.ipc.js';
+import { registerLanIpc } from './ipc/lan.ipc.js';
 
 // Core Integrations
 import { initBackupScheduler } from './cron.js';
 import { initTray } from './tray.js';
 import { initProtocol } from './protocol.js';
 import { initUpdater } from './updater.js';
+
+// LAN transport (offline multi-PC)
+import { startLanServer, stopLanServer, getConnectedDevices } from './lan/server.js';
+import { startConnectionManager, stopConnectionManager } from './lan/connection.js';
+import { getConfig } from './deployment.js';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -70,28 +78,43 @@ if (!isSingleInstance) {
   });
 
   app.on('ready', async () => {
-    // Bring the (possibly pre-existing) user database up to the current schema
-    // BEFORE the renderer loads and starts issuing queries. Skipping this lets a
-    // stale DB throw `P2022: column ... does not exist` on every handler that
-    // touches a newly-added column. Pragmas first so the migration runs on a
-    // WAL connection with foreign keys enforced.
-    try {
-      await initDatabasePragmas();
-      await applyPendingMigrations();
-    } catch (err) {
-      console.error('[startup] Database migration failed:', err);
-      dialog.showErrorBox(
-        'Sugam HMS — Database Update Failed',
-        'The application could not update its database to the latest version and ' +
-          'cannot start safely.\n\nPlease contact support with the log file at:\n' +
-          path.join(app.getPath('userData'), 'logs', 'main.log') +
-          '\n\n' +
-          (err instanceof Error ? err.message : String(err))
-      );
-      app.quit();
-      return;
+    const mode = getMode();
+
+    // DATABASE OWNERSHIP (spec §23): only STANDALONE/HOST own the authoritative
+    // DB. A CLIENT owns no operational database — it must not run migrations,
+    // seed, or open a local clinic DB; it forwards every request to the Host.
+    // So the migration gate runs for STANDALONE/HOST only.
+    if (mode !== 'CLIENT') {
+      // Bring the (possibly pre-existing) user database up to the current schema
+      // BEFORE the renderer loads and starts issuing queries. Skipping this lets
+      // a stale DB throw `P2022: column ... does not exist` on every handler that
+      // touches a newly-added column. Pragmas first so the migration runs on a
+      // WAL connection with foreign keys enforced.
+      try {
+        await initDatabasePragmas();
+        await applyPendingMigrations();
+      } catch (err) {
+        console.error('[startup] Database migration failed:', err);
+        dialog.showErrorBox(
+          'Sugam HMS — Database Update Failed',
+          'The application could not update its database to the latest version and ' +
+            'cannot start safely.\n\nPlease contact support with the log file at:\n' +
+            path.join(app.getPath('userData'), 'logs', 'main.log') +
+            '\n\n' +
+            (err instanceof Error ? err.message : String(err))
+        );
+        app.quit();
+        return;
+      }
+    } else {
+      console.log('[startup] CLIENT mode: skipping local DB init/migrations (Host owns the database).');
     }
+
     createWindow();
+
+    // LAN wiring (HOST starts the server; CLIENT starts the connection manager)
+    // is initialized here after the window exists. Added in Phase C/D.
+    await initLanForMode(mode);
   });
 }
 
@@ -146,7 +169,12 @@ function createWindow() {
   initTray(mainWindow);
   initProtocol(mainWindow);
   initUpdater(mainWindow);
-  initBackupScheduler();
+  // DATABASE OWNERSHIP (spec §23/§24): only STANDALONE/HOST own the DB and its
+  // backups. A CLIENT must never run scheduled/independent backups against its
+  // (non-operational) local placeholder DB.
+  if (getMode() !== 'CLIENT') {
+    initBackupScheduler();
+  }
 
   // Register all IPC modules
   registerAuthIpc();
@@ -159,11 +187,73 @@ function createWindow() {
   registerSettingsIpc();
   registerBackupIpc();
   registerNotificationIPC();
+  // Local-only LAN/deployment channels (never forwarded; usable pre-login).
+  registerDeploymentIpc();
+  registerLanIpc();
 
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
+
+/**
+ * Initialize LAN transport for the current deployment mode.
+ *   - HOST: start the LAN HTTP server so Doctor clients can share this DB.
+ *   - CLIENT: start the Host connection manager (health polling for the status UI).
+ *   - STANDALONE: nothing — byte-for-byte the original single-PC behavior.
+ */
+async function initLanForMode(mode: ReturnType<typeof getMode>): Promise<void> {
+  if (mode === 'HOST') {
+    try {
+      await startLanServer(getConfig().port);
+    } catch (err) {
+      // A bind failure (e.g. port in use, blocked by firewall) must not kill the
+      // Host's own local UI — surface it and keep the app usable locally.
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[startup] LAN server failed to start:', message);
+      dialog.showErrorBox(
+        'Sugam HMS — Network Server Not Started',
+        'This computer is set as the Main/Host, but the clinic network server could not start:\n\n' +
+          message +
+          '\n\nOther computers will not be able to connect until this is resolved (check that the ' +
+          'port is free and allowed through Windows Firewall for Private networks). Sugam HMS will ' +
+          'continue to work on this computer.'
+      );
+    }
+  } else if (mode === 'CLIENT') {
+    startConnectionManager();
+  }
+}
+
+// Warn before shutting down a Host that still has clients connected (spec §21),
+// then stop LAN services cleanly. `allowQuit` prevents an infinite prompt loop.
+let allowQuit = false;
+app.on('before-quit', (event) => {
+  if (!allowQuit && getMode() === 'HOST') {
+    const devices = getConnectedDevices();
+    if (devices.length > 0) {
+      const choice = dialog.showMessageBoxSync({
+        type: 'warning',
+        buttons: ['Cancel', 'Exit Anyway'],
+        defaultId: 0,
+        cancelId: 0,
+        title: 'Clinic devices are connected',
+        message: `${devices.length} clinic device(s) are currently connected.`,
+        detail:
+          'Closing Sugam HMS on this Main computer will disconnect:\n- ' +
+          devices.map((d) => d.name).join('\n- ') +
+          '\n\nThose computers will not be able to use Sugam HMS until this one is running again.',
+      });
+      if (choice === 0) {
+        event.preventDefault();
+        return;
+      }
+    }
+  }
+  allowQuit = true;
+  stopConnectionManager();
+  void stopLanServer();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

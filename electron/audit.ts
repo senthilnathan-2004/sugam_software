@@ -1,5 +1,6 @@
 import { prisma } from './db.js';
 import type { Session } from './session.js';
+import { getRequestContext } from './request-context.js';
 
 /**
  * Records an audit-trail entry attributed to the REAL authenticated user.
@@ -27,6 +28,10 @@ export async function writeAudit(
     console.warn(`[audit] Skipped ${action} ${entity}: no authenticated session`);
     return;
   }
+  // Device/source come from the ambient request context (set by dispatch()), so
+  // a LAN mutation is attributed to the originating paired device — without the
+  // renderer being able to spoof it (spec §25). Defaults to LOCAL for standalone.
+  const ctx = getRequestContext();
   try {
     await prisma.auditLog.create({
       data: {
@@ -35,6 +40,9 @@ export async function writeAudit(
         entity,
         entityId: entityId ?? null,
         metadata: metadata ? JSON.stringify(metadata) : null,
+        deviceId: ctx?.device?.id ?? null,
+        deviceName: ctx?.device?.name ?? null,
+        source: ctx?.source ?? 'LOCAL',
       },
     });
   } catch (err) {

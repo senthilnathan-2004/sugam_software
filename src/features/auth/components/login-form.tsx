@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import Link from 'next/link';
 
 export function LoginForm() {
   const { handleLogin } = useAuth();
@@ -144,6 +145,17 @@ export function LoginForm() {
           </>
         )}
       </Button>
+
+      {/* Multi-PC deployment: configure this computer or connect it to the Main
+          computer. Reachable pre-login so a not-yet-paired Client isn't stuck. */}
+      <div className="text-center pt-1">
+        <Link
+          href="/setup"
+          className="text-[11px] font-bold text-slate-400 hover:text-primary transition-colors hover:underline"
+        >
+          Multi-PC setup — configure or connect this computer
+        </Link>
+      </div>
     </form>
   );
 }

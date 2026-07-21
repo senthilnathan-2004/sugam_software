@@ -3,11 +3,9 @@
 _Snapshot date: 2026-07-20. Reflects `sugam_software/` as currently on disk._
 
 ## 1. What it is
-
 Offline-first, single-tenant desktop Hospital Management System for one hospital/pharmacy site. Packaged as a Windows desktop app (Electron) with an embedded SQLite database — no server, no internet dependency at runtime. Covers patient records, doctor consultations/appointments, pharmacy inventory, POS billing, reporting, and admin settings.
 
 ## 2. Tech stack
-
 | Layer | Technology |
 |---|---|
 | Desktop shell | Electron 33 (Chromium + Node main process) |

@@ -2,7 +2,8 @@
 
 import React, { useState } from 'react';
 import { useForm, useFieldArray } from 'react-hook-form';
-import { Plus, Trash2, IndianRupee, Check, ChevronsUpDown, ScanBarcode } from 'lucide-react';
+import { Plus, Trash2, IndianRupee, Check, ChevronsUpDown, ScanBarcode, AlertTriangle, Ban, RotateCcw } from 'lucide-react';
+import { toast } from 'sonner';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
@@ -35,7 +36,9 @@ export function InvoiceForm({ medicines, prescribedMedicines, consultationDetail
   const { register, control, handleSubmit, setValue, watch, getValues } = useForm({
     defaultValues: {
       discount: '0',
-      items: [{ medicineId: '', batchNo: 'B-MAIN', quantity: 1, price: 0, mrp: 0, gstPercent: 12, total: 0 }],
+      items: [
+        { medicineId: '', batchNo: 'B-MAIN', quantity: 1, price: 0, mrp: 0, gstPercent: 12, total: 0, prescribedName: '', dispense: true },
+      ],
     },
   });
 
@@ -47,56 +50,40 @@ export function InvoiceForm({ medicines, prescribedMedicines, consultationDetail
   const watchItems = watch('items');
   const watchDiscount = watch('discount');
 
-  // Auto-populate from prescriptions
+  // Prefill from the prescription under a STRICT, safe rule (spec correction #3):
+  // only an EXACT, single, case-insensitive full-name inventory match is
+  // auto-selected. Anything ambiguous (multiple candidates), partial/substring,
+  // or a strength/dosage difference is left UNRESOLVED for the biller to confirm
+  // manually — never silently auto-picked. The prescription itself is never
+  // modified; each row carries prescribedName only for on-screen reference.
   React.useEffect(() => {
-    if (prescribedMedicines && prescribedMedicines.length > 0) {
-      const newItems = prescribedMedicines.map((pm) => {
-        // Find best match in inventory by name (case-insensitive)
-        const match = medicines.find(
-          (m) =>
-            m.name.toLowerCase() === pm.name.toLowerCase() ||
-            pm.name.toLowerCase().includes(m.name.toLowerCase()) ||
-            m.name.toLowerCase().includes(pm.name.toLowerCase())
-        );
-
-        if (match) {
-          const unitRate = perUnitPrice(match);
-          return {
-            medicineId: match.id,
-            batchNo: 'B-MAIN',
-            quantity: 1, // Default to 1, biller can adjust
-            price: unitRate,
-            mrp: match.mrp,
-            gstPercent: match.gstPercent,
-            total: unitRate,
-          };
-        }
-        
-        // No match found
-        return {
-          medicineId: '', // They must select manually
-          batchNo: 'B-MAIN',
-          quantity: 1,
-          price: 0,
-          mrp: 0,
-          gstPercent: 12,
-          total: 0,
-          // We can't strictly attach a "note" to the field without updating the type, 
-          // but we can just leave it blank. The biller will see the blank row.
-        };
-      });
-
-      // Reset the form with these items if valid, or just replace the field array
-      // To properly replace using react-hook-form:
-      setValue('items', newItems.length > 0 ? newItems : [{ medicineId: '', batchNo: 'B-MAIN', quantity: 1, price: 0, mrp: 0, gstPercent: 12, total: 0 }]);
-    }
+    if (!prescribedMedicines || prescribedMedicines.length === 0) return;
+    const norm = (s: string) => (s || '').trim().toLowerCase();
+    const newItems = prescribedMedicines.map((pm) => {
+      const target = norm(pm.name);
+      const exact = target ? medicines.filter((m) => norm(m.name) === target) : [];
+      // Auto-load the calculated dispense quantity (dosage × duration, computed +
+      // stored server-side on the prescription). Falls back to 1 when the dosage
+      // was unsupported/absent; the biller can always adjust before billing.
+      const rxQty = typeof pm.quantity === 'number' && pm.quantity > 0 ? pm.quantity : 1;
+      const base = { batchNo: 'B-MAIN', quantity: rxQty, prescribedName: pm.name || '', dispense: true };
+      if (exact.length === 1) {
+        const m = exact[0];
+        const unitRate = perUnitPrice(m);
+        return { ...base, medicineId: m.id, price: unitRate, mrp: m.mrp, gstPercent: m.gstPercent, total: unitRate * rxQty };
+      }
+      // Ambiguous / partial / no match → unresolved (biller confirms manually).
+      return { ...base, medicineId: '', price: 0, mrp: 0, gstPercent: 12, total: 0 };
+    });
+    setValue('items', newItems as any);
   }, [prescribedMedicines, medicines, setValue]);
 
   // Math Calculations
   let subtotal = 0;
   let gstAmount = 0;
 
-  watchItems.forEach((item) => {
+  watchItems.forEach((item: any) => {
+    if (item?.dispense === false) return; // excluded line (not dispensed)
     const qty = item.quantity || 0;
     const price = item.price || 0;
     const gstPercent = item.gstPercent || 0;
@@ -123,23 +110,38 @@ export function InvoiceForm({ medicines, prescribedMedicines, consultationDetail
     }
   };
 
-  const handlePreCheckout = (values: any) => {
-    const activeItems = values.items.filter((item: any) => item.medicineId).map((item: any) => {
-      const med = medicines.find(m => m.id === item.medicineId);
-      return {
-        ...item,
-        name: med ? med.name : 'Unknown Medicine',
-      };
-    });
-    if (activeItems.length === 0) return;
+  const toggleDispense = (index: number) => {
+    const cur = getValues(`items.${index}.dispense` as any);
+    setValue(`items.${index}.dispense` as any, cur === false ? true : false);
+  };
 
-    onOpenCheckout({
-      items: activeItems,
-      subtotal,
-      gstAmount,
-      discount: discountVal,
-      total,
-    });
+  const handlePreCheckout = (values: any) => {
+    const included = values.items.filter((it: any) => it?.dispense !== false);
+    // Matching safety (spec correction #3): every INCLUDED line must be a
+    // confirmed inventory medicine. Block checkout on any unresolved line so the
+    // biller either picks the correct medicine or marks it "Not dispensed".
+    const unresolved = included.filter((it: any) => !it.medicineId);
+    if (unresolved.length > 0) {
+      const names = unresolved.map((it: any) => it.prescribedName).filter(Boolean);
+      toast.error(
+        names.length
+          ? `Confirm the inventory medicine for: ${names.join(', ')} — or mark it "Not dispensed".`
+          : 'Select a medicine for each item, or mark it "Not dispensed", before billing.'
+      );
+      return;
+    }
+    const activeItems = included
+      .filter((it: any) => it.medicineId && (Number(it.quantity) || 0) > 0)
+      .map((it: any) => {
+        const med = medicines.find((m) => m.id === it.medicineId);
+        return { ...it, name: med ? med.name : 'Unknown Medicine' };
+      });
+    if (activeItems.length === 0) {
+      toast.error('Add at least one dispensed medicine to generate a bill.');
+      return;
+    }
+
+    onOpenCheckout({ items: activeItems, subtotal, gstAmount, discount: discountVal, total });
   };
 
   const handleBarcodeScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -162,9 +164,9 @@ export function InvoiceForm({ medicines, prescribedMedicines, consultationDetail
         } else {
           // If the first row is empty, use it. Otherwise append.
           if (currentItems.length === 1 && !currentItems[0].medicineId) {
-             setValue('items.0', { medicineId: med.id, batchNo: 'B-MAIN', quantity: 1, price: unitRate, mrp: med.mrp, gstPercent: med.gstPercent, total: unitRate });
+             setValue('items.0', { medicineId: med.id, batchNo: 'B-MAIN', quantity: 1, price: unitRate, mrp: med.mrp, gstPercent: med.gstPercent, total: unitRate, prescribedName: '', dispense: true });
           } else {
-             append({ medicineId: med.id, batchNo: 'B-MAIN', quantity: 1, price: unitRate, mrp: med.mrp, gstPercent: med.gstPercent, total: unitRate });
+             append({ medicineId: med.id, batchNo: 'B-MAIN', quantity: 1, price: unitRate, mrp: med.mrp, gstPercent: med.gstPercent, total: unitRate, prescribedName: '', dispense: true });
           }
         }
       } else {
@@ -201,6 +203,7 @@ export function InvoiceForm({ medicines, prescribedMedicines, consultationDetail
                       <th className="px-3 py-2">Medicine Name</th>
                       <th className="px-3 py-2">Dosage</th>
                       <th className="px-3 py-2">Duration</th>
+                      <th className="px-3 py-2">Calc Qty</th>
                       <th className="px-3 py-2">Instructions</th>
                     </tr>
                   </thead>
@@ -210,6 +213,9 @@ export function InvoiceForm({ medicines, prescribedMedicines, consultationDetail
                         <td className="px-3 py-2 font-bold">{med.name}</td>
                         <td className="px-3 py-2">{med.dosage || '-'}</td>
                         <td className="px-3 py-2">{med.duration || '-'}</td>
+                        <td className="px-3 py-2 font-bold text-primary">
+                          {typeof med.quantity === 'number' ? med.quantity : <span className="text-amber-600 font-semibold">set manually</span>}
+                        </td>
                         <td className="px-3 py-2 italic text-slate-500">{med.instructions || '-'}</td>
                       </tr>
                     ))}
@@ -239,7 +245,7 @@ export function InvoiceForm({ medicines, prescribedMedicines, consultationDetail
           </div>
           <Button
             type="button"
-            onClick={() => append({ medicineId: '', batchNo: 'B-MAIN', quantity: 1, price: 0, mrp: 0, gstPercent: 12, total: 0 })}
+            onClick={() => append({ medicineId: '', batchNo: 'B-MAIN', quantity: 1, price: 0, mrp: 0, gstPercent: 12, total: 0, prescribedName: '', dispense: true })}
             variant="outline"
             className="text-xs font-bold gap-1 h-9 border-slate-200"
           >
@@ -248,8 +254,23 @@ export function InvoiceForm({ medicines, prescribedMedicines, consultationDetail
         </div>
 
         <div className="space-y-4">
-          {fields.map((field, index) => (
-            <div key={field.id} className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+          {fields.map((field, index) => {
+            const row: any = watchItems[index] || {};
+            const included = row.dispense !== false;
+            const unresolved = included && !row.medicineId;
+            return (
+            <div
+              key={field.id}
+              className={cn(
+                'rounded-xl border p-3',
+                unresolved
+                  ? 'border-amber-300 bg-amber-50/50'
+                  : row.dispense === false
+                    ? 'border-slate-100 bg-slate-50/60 opacity-70'
+                    : 'border-transparent'
+              )}
+            >
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
               <div className="sm:col-span-5 space-y-1">
                 {index === 0 && <Label className="text-[10px] uppercase font-bold text-slate-500">Choose Medicine</Label>}
                 <Popover open={openDropdowns[index] || false} onOpenChange={(val) => setOpenDropdowns((prev) => ({ ...prev, [index]: val }))}>
@@ -339,7 +360,47 @@ export function InvoiceForm({ medicines, prescribedMedicines, consultationDetail
                 </Button>
               </div>
             </div>
-          ))}
+
+            {(row.prescribedName || unresolved || row.dispense === false) && (
+              <div className="mt-2 flex items-center justify-between gap-3 text-[11px]">
+                <div className="flex flex-wrap items-center gap-2 min-w-0">
+                  {row.prescribedName ? (
+                    <span className="text-slate-500 font-medium truncate">
+                      Prescribed: <span className="font-bold text-slate-700">{row.prescribedName}</span>
+                    </span>
+                  ) : null}
+                  {unresolved ? (
+                    <span className="text-amber-700 font-bold flex items-center gap-1">
+                      <AlertTriangle className="h-3.5 w-3.5" /> Confirm the matching medicine or mark not dispensed
+                    </span>
+                  ) : null}
+                  {row.dispense === false ? (
+                    <span className="text-slate-400 font-bold flex items-center gap-1">
+                      <Ban className="h-3.5 w-3.5" /> Not dispensed — excluded from the bill
+                    </span>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleDispense(index)}
+                  className={cn(
+                    'shrink-0 font-bold rounded-lg px-2.5 py-1 border',
+                    row.dispense === false
+                      ? 'text-primary border-primary/30 hover:bg-primary/5'
+                      : 'text-slate-500 border-slate-200 hover:bg-slate-50'
+                  )}
+                >
+                  {row.dispense === false ? (
+                    <span className="flex items-center gap-1"><RotateCcw className="h-3 w-3" /> Include</span>
+                  ) : (
+                    <span className="flex items-center gap-1"><Ban className="h-3 w-3" /> Not dispensed</span>
+                  )}
+                </button>
+              </div>
+            )}
+            </div>
+          );
+          })}
         </div>
       </div>
 

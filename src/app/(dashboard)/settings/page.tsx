@@ -6,20 +6,24 @@ import { PasswordChange } from '@/features/settings/components/password-change';
 import { SystemSettings } from '@/features/settings/components/system-settings';
 import { UserManagement } from '@/features/settings/components/user-management';
 import { BackupSettings } from '@/features/settings/components/backup-settings';
+import { HostSettings } from '@/features/lan/components/host-settings';
 import { useSettings } from '@/features/settings/hooks/use-settings';
 import { useAuthStore } from '@/store/auth.store';
 import { cn } from '@/lib/utils';
+import Link from 'next/link';
+import { Button } from '@/components/ui/button';
 import {
   Settings2,
   UserCircle,
   Building2,
   Users,
   HardDrive,
+  Network,
   ChevronRight,
 } from 'lucide-react';
 import { PageHeader } from '@/components/common/page-header';
 
-type TabId = 'profile' | 'system' | 'users' | 'backup';
+type TabId = 'profile' | 'system' | 'users' | 'backup' | 'network';
 
 interface NavItem {
   id: TabId;
@@ -34,6 +38,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'system',  label: 'Hospital Profile', description: 'Name, address & GST',    icon: Building2,   adminOnly: true  },
   { id: 'users',   label: 'System Users',     description: 'Manage staff accounts',  icon: Users,       adminOnly: true  },
   { id: 'backup',  label: 'Backup & Restore', description: 'Database snapshots',     icon: HardDrive,   adminOnly: true  },
+  { id: 'network', label: 'Multi-PC / Network', description: 'Host & connections',   icon: Network,     adminOnly: true  },
 ];
 export default function SettingsPage() {
   const { user } = useAuthStore();
@@ -246,6 +251,26 @@ export default function SettingsPage() {
                 onSaveConfig={saveBackupSettings}
                 isLoading={isLoading}
               />
+            </div>
+          )}
+
+          {/* Multi-PC / Network tab */}
+          {isAdmin && (
+            <div
+              role="tabpanel"
+              id="panel-network"
+              aria-labelledby="tab-network"
+              hidden={activeTab !== 'network'}
+              className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 focus-visible:outline-none space-y-4"
+            >
+              <HostSettings />
+              <div className="pt-3 border-t border-slate-100">
+                <Link href="/setup">
+                  <Button variant="outline" className="rounded-xl font-bold text-xs">
+                    Change this computer&apos;s role (Setup)
+                  </Button>
+                </Link>
+              </div>
             </div>
           )}
 

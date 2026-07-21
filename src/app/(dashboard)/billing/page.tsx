@@ -14,13 +14,23 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Label } from '@/components/ui/label';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Check, ChevronsUpDown, User, Receipt, TrendingUp, MessageCircle } from 'lucide-react';
+import { Check, ChevronsUpDown, User, Receipt, TrendingUp, MessageCircle, Clock, ListChecks, RefreshCw, Stethoscope } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 
 export default function POSBillingPage() {
-  const { saveInvoice, isLoading: isInvoiceSaving, prescribedMedicines, consultationDetails, fetchPatientPrescriptions, shareInvoiceWhatsApp } = useBilling();
+  const {
+    saveInvoice,
+    isLoading: isInvoiceSaving,
+    prescribedMedicines,
+    consultationDetails,
+    fetchPatientPrescriptions,
+    shareInvoiceWhatsApp,
+    readyQueue,
+    fetchReadyQueue,
+    loadConsultation,
+  } = useBilling();
   const { patients, fetchPatients } = usePatients();
   const { medicines, fetchMedicines } = useInventory();
 
@@ -29,6 +39,13 @@ export default function POSBillingPage() {
   const [patientDropdownOpen, setPatientDropdownOpen] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState<any>(null);
   const [preCheckoutPayload, setPreCheckoutPayload] = useState<any>(null);
+  // The EXACT completed visit being billed (from the Ready-for-Billing queue).
+  // '' = manual/walk-in mode (no consultation link).
+  const [selectedConsultationId, setSelectedConsultationId] = useState<string>('');
+  const [queueDoctor, setQueueDoctor] = useState<string>('');
+  // One idempotency key per checkout attempt: a double-click / retry of the SAME
+  // cart is deduped by the Host; a genuinely new bill gets a new key (spec §31).
+  const [checkoutIdemKey, setCheckoutIdemKey] = useState<string>('');
 
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [printInvoiceData, setPrintInvoiceData] = useState<any>(null);
@@ -37,9 +54,23 @@ export default function POSBillingPage() {
   useEffect(() => {
     fetchPatients();
     fetchMedicines();
-  }, [fetchPatients, fetchMedicines]);
+    fetchReadyQueue();
+  }, [fetchPatients, fetchMedicines, fetchReadyQueue]);
+
+  // Live Ready-for-Billing refresh (spec §20): poll every 4s, but only while the
+  // window/tab is visible to avoid needless load.
+  useEffect(() => {
+    const tick = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') fetchReadyQueue();
+    };
+    const id = setInterval(tick, 4000);
+    return () => clearInterval(id);
+  }, [fetchReadyQueue]);
 
   useEffect(() => {
+    // In queue mode the prescription comes from the exact consultation
+    // (loadConsultation); do NOT overwrite it with the patient's latest pull.
+    if (selectedConsultationId) return;
     if (selectedPatientId) {
       const pat = patients.find((p) => p.id === selectedPatientId);
       setSelectedPatient(pat);
@@ -48,11 +79,38 @@ export default function POSBillingPage() {
       setSelectedPatient(null);
       fetchPatientPrescriptions('');
     }
-  }, [selectedPatientId, patients, fetchPatientPrescriptions]);
+  }, [selectedPatientId, patients, fetchPatientPrescriptions, selectedConsultationId]);
+
+  // Pick a specific completed visit from the queue → load THAT consultation's
+  // prescription (not an arbitrary latest one) and bill against it.
+  const handleSelectQueueItem = async (row: any) => {
+    const loaded = await loadConsultation(row.consultationId);
+    if (!loaded) return;
+    setSelectedConsultationId(row.consultationId);
+    setQueueDoctor(loaded.doctorName || row.doctorName || '');
+    const pat = loaded.patient ?? row.patient ?? null;
+    setSelectedPatient(pat);
+    setSelectedPatientId(pat?.id ?? '');
+  };
+
+  // Return to manual/walk-in billing (no consultation link).
+  const clearConsultation = () => {
+    setSelectedConsultationId('');
+    setQueueDoctor('');
+    setSelectedPatientId('');
+    setSelectedPatient(null);
+  };
 
   // Patient is optional — cashier may bill a walk-in (no patient) or attach one.
   const handleOpenCheckout = (payload: any) => {
     setPreCheckoutPayload(payload);
+    // New key for this checkout attempt (crypto.randomUUID is available in the
+    // renderer); reused across payment-modal retries of the same cart.
+    setCheckoutIdemKey(
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `idem-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
     setPaymentOpen(true);
   };
 
@@ -62,7 +120,8 @@ export default function POSBillingPage() {
     console.log('[POS] confirm clicked — items:', preCheckoutPayload?.items?.length, 'total:', preCheckoutPayload?.total, 'mode:', paymentDetails?.paymentMode);
     const finalPayload = {
       patientId: selectedPatientId || null,
-      walkinName: selectedPatientId ? undefined : 'Walk-in Customer',
+      // Walk-in name only when there is neither a patient nor a linked visit.
+      walkinName: selectedPatientId || selectedConsultationId ? undefined : 'Walk-in Customer',
       items: preCheckoutPayload.items,
       subtotal: preCheckoutPayload.subtotal,
       gstAmount: preCheckoutPayload.gstAmount,
@@ -71,6 +130,9 @@ export default function POSBillingPage() {
       paymentMode: paymentDetails.paymentMode,
       paymentStatus: 'PAID',
       payments: paymentDetails.payments,
+      // Durable link to the exact billed visit (+ server dup-billing guard).
+      consultationId: selectedConsultationId || null,
+      idempotencyKey: checkoutIdemKey || undefined,
     };
 
     const res = await saveInvoice(finalPayload);
@@ -81,6 +143,10 @@ export default function POSBillingPage() {
       // Prefill WhatsApp number from the patient (if attached); walk-in stays blank
       // for the cashier to type the customer's number.
       setWaPhone(selectedPatient?.phone ?? '');
+      // The billed visit leaves the Ready-for-Billing queue immediately.
+      setSelectedConsultationId('');
+      setQueueDoctor('');
+      fetchReadyQueue();
     }
   };
 
@@ -186,8 +252,78 @@ export default function POSBillingPage() {
       />
 
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 items-start">
-        {/* Left Column — Patient select bar */}
-        <div className="xl:col-span-1">
+        {/* Left Column — Ready-for-Billing queue (primary) + patient select */}
+        <div className="xl:col-span-1 space-y-4">
+          {/* Ready for Billing — the live queue fed by completed consultations */}
+          <Card className="p-4 bg-white border border-slate-100 shadow-md rounded-hms space-y-3">
+            <div className="flex items-center justify-between border-b pb-2.5">
+              <div className="flex items-center gap-2 text-slate-800">
+                <ListChecks className="h-5 w-5 text-primary" />
+                <h3 className="text-sm font-bold">Ready for Billing</h3>
+                <span className="text-[10px] font-bold text-white bg-primary rounded-full px-2 py-0.5">{readyQueue.length}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => fetchReadyQueue()}
+                className="text-slate-400 hover:text-primary"
+                title="Refresh"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            <div className="max-h-80 overflow-y-auto space-y-2 pr-1">
+              {readyQueue.length === 0 && (
+                <p className="text-[11px] text-slate-400 font-medium py-6 text-center">
+                  No patients waiting to be billed. Completed consultations appear here automatically.
+                </p>
+              )}
+              {readyQueue.map((row: any) => {
+                const active = selectedConsultationId === row.consultationId;
+                const time = row.completedAt
+                  ? new Date(row.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                  : '';
+                return (
+                  <button
+                    key={row.consultationId}
+                    type="button"
+                    onClick={() => handleSelectQueueItem(row)}
+                    className={cn(
+                      'w-full text-left p-3 rounded-xl border transition',
+                      active ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-slate-100 hover:bg-slate-50'
+                    )}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-bold text-slate-800">{row.patient?.name ?? 'Patient'}</span>
+                      <span className="text-[10px] text-slate-400 font-semibold flex items-center gap-1">
+                        <Clock className="h-3 w-3" /> {time}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-slate-500 font-semibold mt-0.5">
+                      {row.patient?.patientId} &bull; {row.patient?.phone}
+                    </div>
+                    <div className="text-[10px] text-slate-500 font-medium mt-1 flex items-center gap-1">
+                      <Stethoscope className="h-3 w-3 text-primary" /> {row.doctorName}
+                      {row.itemCount ? <span className="text-slate-400"> &bull; {row.itemCount} item(s)</span> : null}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </Card>
+
+          {selectedConsultationId && (
+            <div className="bg-primary/5 border border-primary/30 p-3 rounded-xl text-[11px] font-semibold text-primary-dark flex items-center justify-between gap-2">
+              <span>
+                Billing the selected visit
+                {queueDoctor ? ` (Dr. ${queueDoctor})` : ''} — prescription loaded from that consultation.
+              </span>
+              <button type="button" onClick={clearConsultation} className="font-bold underline shrink-0">
+                Cancel
+              </button>
+            </div>
+          )}
+
           <Card className="p-6 bg-white border border-slate-100 shadow-md rounded-hms space-y-4">
             <div className="flex items-center gap-2 text-slate-800 border-b pb-2.5">
               <User className="h-5 w-5 text-primary" />
